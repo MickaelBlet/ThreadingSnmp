@@ -50,4 +50,4 @@ target_link_libraries(snmp_thread_example
     threading_snmp
 )
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -pthread")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -ggdb -Wall -Wextra -pthread")

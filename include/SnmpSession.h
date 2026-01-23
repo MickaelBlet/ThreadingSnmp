@@ -2,6 +2,7 @@
 #define SNMP_SESSION_H
 
 #include <string>
+#include <vector>
 #include <memory>
 #include <mutex>
 #include <net-snmp/net-snmp-config.h>
@@ -20,6 +21,7 @@ public:
     bool isOpen() const;
 
     std::string get(const std::string& oid);
+    std::vector<std::pair<std::string, std::string>> getMulti(const std::vector<std::string>& oids);
     bool set(const std::string& oid, char type, const std::string& value);
 
 private:
