@@ -3,10 +3,11 @@
 #include <cstring>
 
 SnmpWorker::SnmpWorker()
-    : running_(false), activeTasks_(0) {
+    : running_(false), trapRunning_(false), activeTasks_(0), trapSession_(nullptr) {
 }
 
 SnmpWorker::~SnmpWorker() {
+    stopTrapReceiver();
     stop();
 }
 
@@ -126,7 +127,11 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
 
     if (operation == NETSNMP_CALLBACK_OP_RECEIVED_MESSAGE) {
         if (pdu->errstat == SNMP_ERR_NOERROR) {
-            if (context->task.isMultiOid) {
+            if (context->task.operation == SnmpOperation::SET) {
+                if (context->task.setCallback) {
+                    context->task.setCallback(true, "Success");
+                }
+            } else if (context->task.isMultiOid) {
                 std::vector<std::pair<std::string, std::string>> results;
                 size_t idx = 0;
                 for (netsnmp_variable_list* vars = pdu->variables;
@@ -150,7 +155,11 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
             }
         } else {
             std::string errorMsg = "ERROR: " + std::string(snmp_errstring(pdu->errstat));
-            if (context->task.isMultiOid) {
+            if (context->task.operation == SnmpOperation::SET) {
+                if (context->task.setCallback) {
+                    context->task.setCallback(false, errorMsg);
+                }
+            } else if (context->task.isMultiOid) {
                 std::vector<std::pair<std::string, std::string>> results;
                 for (const auto& oid : context->task.oids) {
                     results.push_back({oid, errorMsg});
@@ -166,7 +175,11 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
         }
     } else if (operation == NETSNMP_CALLBACK_OP_TIMED_OUT) {
         std::string errorMsg = "ERROR: Request timed out";
-        if (context->task.isMultiOid) {
+        if (context->task.operation == SnmpOperation::SET) {
+            if (context->task.setCallback) {
+                context->task.setCallback(false, errorMsg);
+            }
+        } else if (context->task.isMultiOid) {
             std::vector<std::pair<std::string, std::string>> results;
             for (const auto& oid : context->task.oids) {
                 results.push_back({oid, errorMsg});
@@ -270,28 +283,46 @@ void SnmpWorker::processTask(const SnmpTask& task) {
         activeSessions_[sessionHandle] = context;
     }
 
-    netsnmp_pdu* pdu = snmp_pdu_create(SNMP_MSG_GET);
+    netsnmp_pdu* pdu = nullptr;
 
-    if (task.isMultiOid) {
-        for (const auto& oidStr : task.oids) {
+    if (task.operation == SnmpOperation::SET) {
+        pdu = snmp_pdu_create(SNMP_MSG_SET);
+        for (const auto& setValue : task.setValues) {
             oid oidArray[MAX_OID_LEN];
             size_t oidLen = MAX_OID_LEN;
-            if (read_objid(oidStr.c_str(), oidArray, &oidLen)) {
-                snmp_add_null_var(pdu, oidArray, oidLen);
+            if (read_objid(setValue.oid.c_str(), oidArray, &oidLen)) {
+                if (snmp_add_var(pdu, oidArray, oidLen, setValue.type, setValue.value.c_str()) != 0) {
+                    std::cerr << "Failed to add SET variable: " << setValue.oid << std::endl;
+                }
             }
         }
     } else {
-        oid oidArray[MAX_OID_LEN];
-        size_t oidLen = MAX_OID_LEN;
-        if (read_objid(task.oid.c_str(), oidArray, &oidLen)) {
-            snmp_add_null_var(pdu, oidArray, oidLen);
+        pdu = snmp_pdu_create(SNMP_MSG_GET);
+        if (task.isMultiOid) {
+            for (const auto& oidStr : task.oids) {
+                oid oidArray[MAX_OID_LEN];
+                size_t oidLen = MAX_OID_LEN;
+                if (read_objid(oidStr.c_str(), oidArray, &oidLen)) {
+                    snmp_add_null_var(pdu, oidArray, oidLen);
+                }
+            }
+        } else {
+            oid oidArray[MAX_OID_LEN];
+            size_t oidLen = MAX_OID_LEN;
+            if (read_objid(task.oid.c_str(), oidArray, &oidLen)) {
+                snmp_add_null_var(pdu, oidArray, oidLen);
+            }
         }
     }
 
     if (snmp_send(sessionHandle, pdu) == 0) {
         snmp_free_pdu(pdu);
         std::string errorMsg = "ERROR: Failed to send request";
-        if (task.isMultiOid) {
+        if (task.operation == SnmpOperation::SET) {
+            if (task.setCallback) {
+                task.setCallback(false, errorMsg);
+            }
+        } else if (task.isMultiOid) {
             std::vector<std::pair<std::string, std::string>> results;
             for (const auto& oid : task.oids) {
                 results.push_back({oid, errorMsg});
@@ -371,4 +402,139 @@ void SnmpWorker::selectThread() {
             }
         }
     }
+}
+
+int SnmpWorker::trapCallback(int operation, netsnmp_session* session, int reqid, netsnmp_pdu* pdu, void* magic) {
+    if (!magic || !pdu) {
+        return 1;
+    }
+
+    SnmpWorker* worker = static_cast<SnmpWorker*>(magic);
+
+    if (operation != NETSNMP_CALLBACK_OP_RECEIVED_MESSAGE) {
+        return 1;
+    }
+
+    if (pdu->command != SNMP_MSG_TRAP && pdu->command != SNMP_MSG_TRAP2 && pdu->command != SNMP_MSG_INFORM) {
+        return 1;
+    }
+
+    SnmpTrap trap;
+
+    if (session && session->peername) {
+        trap.sourceIp = session->peername;
+    }
+
+    if (session && session->community) {
+        trap.community = std::string(reinterpret_cast<char*>(session->community), session->community_len);
+    }
+
+    if (pdu->command == SNMP_MSG_TRAP) {
+        trap.enterpriseOid = "";
+        if (pdu->enterprise) {
+            char oidStr[MAX_OID_LEN * 4];
+            snprint_objid(oidStr, sizeof(oidStr), pdu->enterprise, pdu->enterprise_length);
+            trap.enterpriseOid = oidStr;
+        }
+        trap.genericTrap = pdu->trap_type;
+        trap.specificTrap = pdu->specific_type;
+        trap.uptime = pdu->time;
+    } else {
+        trap.enterpriseOid = "";
+        trap.genericTrap = -1;
+        trap.specificTrap = -1;
+        trap.uptime = 0;
+    }
+
+    for (netsnmp_variable_list* vars = pdu->variables; vars != nullptr; vars = vars->next_variable) {
+        char oidBuf[MAX_OID_LEN * 4];
+        char valBuf[1024];
+
+        snprint_objid(oidBuf, sizeof(oidBuf), vars->name, vars->name_length);
+        snprint_value(valBuf, sizeof(valBuf), vars->name, vars->name_length, vars);
+
+        trap.varbinds.push_back({std::string(oidBuf), std::string(valBuf)});
+    }
+
+    if (worker->trapCallback_) {
+        worker->trapCallback_(trap);
+    }
+
+    return 1;
+}
+
+void SnmpWorker::startTrapReceiver(int port, const std::function<void(const SnmpTrap&)>& callback) {
+    if (trapRunning_.load()) {
+        std::cerr << "Trap receiver already running" << std::endl;
+        return;
+    }
+
+    trapCallback_ = callback;
+    trapRunning_.store(true);
+    trapThread_ = std::thread(&SnmpWorker::trapReceiverThread, this);
+}
+
+void SnmpWorker::stopTrapReceiver() {
+    if (!trapRunning_.load()) {
+        return;
+    }
+
+    trapRunning_.store(false);
+
+    if (trapThread_.joinable()) {
+        trapThread_.join();
+    }
+
+    if (trapSession_) {
+        snmp_close(trapSession_);
+        trapSession_ = nullptr;
+    }
+}
+
+void SnmpWorker::trapReceiverThread() {
+    netsnmp_session session;
+    snmp_sess_init(&session);
+
+    session.version = SNMP_VERSION_2c;
+    session.peername = strdup("udp:162");
+    session.callback = trapCallback;
+    session.callback_magic = this;
+    session.isAuthoritative = SNMP_SESS_UNKNOWNAUTH;
+
+    SOCK_STARTUP;
+    trapSession_ = snmp_open(&session);
+
+    free(session.peername);
+
+    if (!trapSession_) {
+        std::cerr << "Failed to open trap receiver session" << std::endl;
+        trapRunning_.store(false);
+        return;
+    }
+
+    std::cout << "SNMP Trap receiver started on port 162" << std::endl;
+
+    while (trapRunning_.load()) {
+        int fds = 0;
+        fd_set fdset;
+        struct timeval timeout;
+        int block = 1;
+
+        FD_ZERO(&fdset);
+        snmp_select_info(&fds, &fdset, &timeout, &block);
+
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 100000;
+
+        if (fds > 0) {
+            int count = select(fds, &fdset, nullptr, nullptr, &timeout);
+            if (count > 0) {
+                snmp_read(&fdset);
+            } else if (count == 0) {
+                snmp_timeout();
+            }
+        }
+    }
+
+    std::cout << "SNMP Trap receiver stopped" << std::endl;
 }

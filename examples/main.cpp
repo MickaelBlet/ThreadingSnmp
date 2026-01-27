@@ -277,12 +277,76 @@ int main(int argc, char* argv[]) {
     worker.wait();
     worker.stop();
 
+    std::cout << std::endl << "=== Example 6: Async SNMP SET Operation ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        SnmpTask setTask;
+        setTask.host = host;
+        setTask.community = community;
+        setTask.operation = SnmpOperation::SET;
+        setTask.setValues = {
+            {"1.3.6.1.2.1.1.4.0", 's', "admin@example.com"},
+            {"1.3.6.1.2.1.1.6.0", 's', "Server Room A"}
+        };
+        setTask.setCallback = [](bool success, const std::string& message) {
+            if (success) {
+                std::cout << "SET operation succeeded: " << message << std::endl;
+            } else {
+                std::cout << "SET operation failed: " << message << std::endl;
+            }
+        };
+
+        worker.addTask(setTask);
+        worker.wait();
+        worker.stop();
+
+        std::cout << "Note: SET operations may fail if the SNMP agent is read-only" << std::endl;
+    }
+
+    std::cout << std::endl << "=== Example 7: SNMP Trap Receiver (Optional) ===" << std::endl;
+    {
+        std::cout << "To demonstrate trap receiver, uncomment the code below and send a trap:" << std::endl;
+        std::cout << "Example: snmptrap -v 2c -c public localhost '' 1.3.6.1.4.1.8072.2.3.0.1 1.3.6.1.4.1.8072.2.3.2.1 i 123456" << std::endl;
+        std::cout << std::endl;
+
+        SnmpWorker worker;
+
+        auto trapHandler = [](const SnmpTrap& trap) {
+            std::cout << std::endl << "=== TRAP RECEIVED ===" << std::endl;
+            std::cout << "Source: " << trap.sourceIp << std::endl;
+            std::cout << "Community: " << trap.community << std::endl;
+            if (!trap.enterpriseOid.empty()) {
+                std::cout << "Enterprise OID: " << trap.enterpriseOid << std::endl;
+                std::cout << "Generic Trap: " << trap.genericTrap << std::endl;
+                std::cout << "Specific Trap: " << trap.specificTrap << std::endl;
+                std::cout << "Uptime: " << trap.uptime << std::endl;
+            }
+            std::cout << "Varbinds:" << std::endl;
+            for (const auto& vb : trap.varbinds) {
+                std::cout << "  " << vb.first << " = " << vb.second << std::endl;
+            }
+            std::cout << "===================" << std::endl;
+        };
+
+        std::cout << "Starting trap receiver (will listen for 10 seconds)..." << std::endl;
+        worker.startTrapReceiver(162, trapHandler);
+
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+
+        worker.stopTrapReceiver();
+        std::cout << "Trap receiver example complete" << std::endl;
+    }
+
     std::cout << std::endl << "=== Demo Complete ===" << std::endl;
     std::cout << std::endl;
     std::cout << "Summary:" << std::endl;
     std::cout << "- SnmpSession supports both single OID and multi-OID GET" << std::endl;
     std::cout << "- SnmpWorker uses snmp_select for efficient async I/O" << std::endl;
     std::cout << "- Single thread handles all SNMP requests using select()" << std::endl;
+    std::cout << "- Async SET operations for modifying SNMP values" << std::endl;
+    std::cout << "- Built-in SNMP trap receiver for monitoring notifications" << std::endl;
     std::cout << "- Better performance with concurrent requests" << std::endl;
 
     snmp_shutdown("ThreadingSnmp");

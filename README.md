@@ -15,6 +15,8 @@ This project provides a thread-safe wrapper around the net-snmp library, enablin
 - C++14 standard compliance
 - Thread-safe SNMP session handling
 - **Multi-OID GET support**: Query multiple OIDs in a single SNMP request
+- **Async SET operations**: Modify SNMP values asynchronously
+- **SNMP Trap Receiver**: Built-in trap/inform listener for monitoring notifications
 - **snmp_select based architecture**: Efficient async I/O using a single select thread
 - Support for SNMPv1, SNMPv2c, and SNMPv3
 - Asynchronous task processing with callbacks
@@ -161,6 +163,80 @@ worker.wait();
 worker.stop();
 ```
 
+#### Async SNMP SET Operation
+
+```cpp
+#include "SnmpWorker.h"
+
+SnmpWorker worker;
+worker.start();
+
+SnmpTask setTask;
+setTask.host = "localhost";
+setTask.community = "private";
+setTask.operation = SnmpOperation::SET;
+setTask.setValues = {
+    {"1.3.6.1.2.1.1.4.0", 's', "admin@example.com"},  // sysContact
+    {"1.3.6.1.2.1.1.6.0", 's', "Server Room A"}       // sysLocation
+};
+setTask.setCallback = [](bool success, const std::string& message) {
+    if (success) {
+        std::cout << "SET succeeded: " << message << std::endl;
+    } else {
+        std::cout << "SET failed: " << message << std::endl;
+    }
+};
+
+worker.addTask(setTask);
+worker.wait();
+worker.stop();
+```
+
+**Common SNMP Type Codes for SET:**
+- `'i'` - Integer
+- `'s'` - String
+- `'x'` - Hex String
+- `'d'` - Decimal String
+- `'n'` - Null
+- `'o'` - Object ID
+- `'t'` - Time Ticks
+- `'a'` - IP Address
+- `'u'` - Unsigned Integer
+
+#### SNMP Trap Receiver
+
+```cpp
+#include "SnmpWorker.h"
+
+SnmpWorker worker;
+
+// Define trap handler callback
+auto trapHandler = [](const SnmpTrap& trap) {
+    std::cout << "Trap received from: " << trap.sourceIp << std::endl;
+    std::cout << "Community: " << trap.community << std::endl;
+
+    for (const auto& varbind : trap.varbinds) {
+        std::cout << "  " << varbind.first << " = " << varbind.second << std::endl;
+    }
+};
+
+// Start trap receiver on port 162 (default SNMP trap port)
+worker.startTrapReceiver(162, trapHandler);
+
+// Trap receiver runs in background...
+// Do other work or wait for traps
+
+// Stop trap receiver when done
+worker.stopTrapReceiver();
+```
+
+**Testing Trap Receiver:**
+```bash
+# Send a test trap using snmptrap command
+snmptrap -v 2c -c public localhost '' 1.3.6.1.4.1.8072.2.3.0.1 \
+    1.3.6.1.4.1.8072.2.3.2.1 i 123456
+```
+
 ## Architecture
 
 ### SnmpSession Class
@@ -179,11 +255,25 @@ Provides asynchronous SNMP operations using **snmp_select**:
 - **Single select thread** instead of multiple worker threads
 - Uses `snmp_select()` for efficient async I/O multiplexing
 - Asynchronous SNMP requests with `snmp_send()` and callbacks
-- Support for both single-OID and multi-OID async requests
+- Support for both single-OID and multi-OID async GET requests
+- **Support for async SET operations** - modify SNMP values asynchronously
+- **Built-in SNMP trap receiver** - listen for trap/inform notifications
 - Task queue with condition variables
-- Callback-based result handling (single callback or multi-callback)
+- Callback-based result handling (single, multi, and SET callbacks)
+- Separate trap receiver thread for monitoring
 - Graceful shutdown and cleanup
 - Better resource usage compared to thread-per-request approach
+
+### SnmpTrap Structure
+
+Contains trap notification information:
+- `sourceIp` - IP address of the trap sender
+- `community` - Community string used
+- `enterpriseOid` - Enterprise OID (for SNMPv1 traps)
+- `genericTrap` - Generic trap type
+- `specificTrap` - Specific trap type
+- `uptime` - System uptime when trap was generated
+- `varbinds` - Vector of OID-value pairs containing trap data
 
 ## Common SNMP OIDs
 
