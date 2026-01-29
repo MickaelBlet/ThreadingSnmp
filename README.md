@@ -125,14 +125,15 @@ if (session.open()) {
 SnmpWorker worker;  // Single select thread
 worker.start();
 
-// Single OID per task
+// Single OID per task (using vector)
 SnmpTask task;
 task.host = "localhost";
 task.community = "public";
-task.oid = "1.3.6.1.2.1.1.1.0";
-task.isMultiOid = false;
-task.callback = [](const std::string& oid, const std::string& result) {
-    std::cout << "OID: " << oid << " -> " << result << std::endl;
+task.oids = {"1.3.6.1.2.1.1.1.0"};  // Single OID in vector
+task.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
+    for (const auto& result : results) {
+        std::cout << result.first << " -> " << result.second << std::endl;
+    }
 };
 
 worker.addTask(task);
@@ -148,12 +149,12 @@ worker.stop();
 SnmpWorker worker;
 worker.start();
 
+// Multiple OIDs per task (same unified API)
 SnmpTask task;
 task.host = "localhost";
 task.community = "public";
 task.oids = {"1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.3.0", "1.3.6.1.2.1.1.5.0"};
-task.isMultiOid = true;
-task.multiCallback = [](const std::vector<std::pair<std::string, std::string>>& results) {
+task.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
     for (const auto& result : results) {
         std::cout << result.first << " -> " << result.second << std::endl;
     }
@@ -301,7 +302,8 @@ Provides asynchronous SNMP operations using **snmp_select**:
 - **Single select thread** instead of multiple worker threads
 - Uses `snmp_select()` for efficient async I/O multiplexing
 - Asynchronous SNMP requests with `snmp_send()` and callbacks
-- Support for both single-OID and multi-OID async GET requests
+- **Unified API** - always use vector for OIDs (single or multiple), single callback type
+- Support for async GET requests with single or multiple OIDs
 - **Support for async SET operations** - modify SNMP values asynchronously
 - **Support for async INFORM operations** - send acknowledged notifications
 - **Built-in SNMP trap receiver** - listen for trap/inform notifications

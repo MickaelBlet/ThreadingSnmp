@@ -7,19 +7,6 @@
 
 std::atomic<int> responseCount(0);
 
-void printResult(const std::string& oid, const std::string& result) {
-    std::cout << "OID: " << oid << " -> " << result << std::endl;
-    responseCount.fetch_add(1);
-}
-
-void printMultiResult(const std::vector<std::pair<std::string, std::string>>& results) {
-    std::cout << "Multi-OID GET response:" << std::endl;
-    for (const auto& result : results) {
-        std::cout << "  OID: " << result.first << " -> " << result.second << std::endl;
-    }
-    responseCount.fetch_add(1);
-}
-
 int main(int argc, char* argv[]) {
     SOCK_STARTUP;
     init_snmp("ThreadingSnmp");
@@ -93,7 +80,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << std::endl << "=== Example 3: Async SNMP with snmp_select (Single OID per request) ===" << std::endl;
+    std::cout << std::endl << "=== Example 3: Async Single OID Requests ===" << std::endl;
     {
         SnmpWorker worker;
         worker.start();
@@ -110,9 +97,18 @@ int main(int argc, char* argv[]) {
 
         auto startTime = std::chrono::high_resolution_clock::now();
 
-        // Using the new convenience method for single-OID tasks
+        // Each task requests one OID
         for (const auto& oid : oids) {
-            worker.addTask(host, community, oid, printResult);
+            SnmpTask task;
+            task.host = host;
+            task.community = community;
+            task.oids = {oid};  // Single OID in vector
+            task.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
+                for (const auto& result : results) {
+                    std::cout << "OID: " << result.first << " -> " << result.second << std::endl;
+                }
+            };
+            worker.addTask(task);
         }
 
         std::cout << "Waiting for all async tasks to complete..." << std::endl;
@@ -126,7 +122,7 @@ int main(int argc, char* argv[]) {
         worker.stop();
     }
 
-    std::cout << std::endl << "=== Example 4: Async Multi-OID GET with snmp_select ===" << std::endl;
+    std::cout << std::endl << "=== Example 4: Async Multi-OID GET ===" << std::endl;
     {
         responseCount.store(0);
         SnmpWorker worker;
@@ -146,24 +142,31 @@ int main(int argc, char* argv[]) {
 
         auto startTime = std::chrono::high_resolution_clock::now();
 
-        // Using the new convenience method for multi-OID tasks
-        worker.addTask(host, community, group1,
-            [](const std::vector<std::pair<std::string, std::string>>& results) {
-                std::cout << "Group 1 response:" << std::endl;
-                for (const auto& result : results) {
-                    std::cout << "  " << result.first << " -> " << result.second << std::endl;
-                }
-                responseCount.fetch_add(1);
-            });
+        SnmpTask task1;
+        task1.host = host;
+        task1.community = community;
+        task1.oids = group1;
+        task1.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
+            std::cout << "Group 1 response:" << std::endl;
+            for (const auto& result : results) {
+                std::cout << "  " << result.first << " -> " << result.second << std::endl;
+            }
+            responseCount.fetch_add(1);
+        };
+        worker.addTask(task1);
 
-        worker.addTask(host, community, group2,
-            [](const std::vector<std::pair<std::string, std::string>>& results) {
-                std::cout << "Group 2 response:" << std::endl;
-                for (const auto& result : results) {
-                    std::cout << "  " << result.first << " -> " << result.second << std::endl;
-                }
-                responseCount.fetch_add(1);
-            });
+        SnmpTask task2;
+        task2.host = host;
+        task2.community = community;
+        task2.oids = group2;
+        task2.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
+            std::cout << "Group 2 response:" << std::endl;
+            for (const auto& result : results) {
+                std::cout << "  " << result.first << " -> " << result.second << std::endl;
+            }
+            responseCount.fetch_add(1);
+        };
+        worker.addTask(task2);
 
         std::cout << "Waiting for all multi-OID async tasks to complete..." << std::endl;
         worker.wait();
@@ -177,107 +180,7 @@ int main(int argc, char* argv[]) {
         worker.stop();
     }
 
-    std::cout << std::endl << "=== Example 5: Using Convenience Methods (Simplified API) ===" << std::endl;
-    {
-        SnmpWorker worker;
-        worker.start();
-
-        auto startTime = std::chrono::high_resolution_clock::now();
-
-        // Single-OID convenience method with default timeout (1 second)
-        worker.addTask(host, community, "1.3.6.1.2.1.1.1.0",
-            [](const std::string& oid, const std::string& result) {
-                std::cout << "Single OID: " << oid << " -> " << result << std::endl;
-            });
-
-        // Multi-OID convenience method with custom timeout (5 seconds, 2 retries)
-        std::vector<std::string> systemOids = {
-            "1.3.6.1.2.1.1.4.0",
-            "1.3.6.1.2.1.1.5.0",
-            "1.3.6.1.2.1.1.6.0"
-        };
-
-        worker.addTask("192.0.2.99", community, systemOids,
-            [](const std::vector<std::pair<std::string, std::string>>& results) {
-                std::cout << "Multi-OID convenience method results (5s timeout): " << results.size() << std::endl;
-                for (const auto& result : results) {
-                    std::cout << "  " << result.first << " -> " << result.second << std::endl;
-                }
-            },
-            SNMP_VERSION_2c,  // version
-            1000000,          // timeout: 5 seconds in microseconds
-            5);               // retries: 2
-
-        worker.wait();
-
-        auto endTime = std::chrono::high_resolution_clock::now();
-        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
-        std::cout << "Completed in " << duration.count() << " ms using simplified API" << std::endl;
-
-        worker.stop();
-    }
-
-    std::cout << std::endl << "=== Example 6: Multiple Hosts with snmp_select ===" << std::endl;
-    {
-        SnmpWorker worker;
-        worker.start();
-
-        std::vector<std::string> hosts = {host};
-
-        std::vector<std::string> commonOids = {
-            "1.3.6.1.2.1.1.1.0",
-            "1.3.6.1.2.1.1.5.0"
-        };
-
-        for (const auto& h : hosts) {
-            // Using the new convenience method
-            worker.addTask(h, community, commonOids,
-                [h](const std::vector<std::pair<std::string, std::string>>& results) {
-                    std::cout << "Host: " << h << std::endl;
-                    for (const auto& result : results) {
-                        std::cout << "  " << result.first << " -> " << result.second << std::endl;
-                    }
-                });
-        }
-
-        worker.wait();
-        worker.stop();
-    }
-
-    std::cout << std::endl << "=== Memory Leak Test: 100000 iterations ===" << std::endl;
-    SnmpWorker worker;
-    worker.start();
-    for (int i = 0; i < 100; i++) {
-        for (int j = 0; j < 10; j++) {
-            std::vector<std::string> commonOids = {
-                "1.3.6.1.2.1.1.1.0",
-                "1.3.6.1.2.1.1.2.0",
-                "1.3.6.1.2.1.1.3.0",
-                "1.3.6.1.2.1.1.4.0",
-                "1.3.6.1.2.1.1.5.0",
-                "1.3.6.1.2.1.1.6.0",
-                "1.3.6.1.2.1.1.7.0"
-            };
-            // Using the new convenience method
-            worker.addTask(host, community, commonOids,
-                [](const std::vector<std::pair<std::string, std::string>>& results) {
-                    // for (const auto& result : results) {
-                    //     std::cout << "  " << result.first << " -> " << result.second << std::endl;
-                    // }
-                }
-            );
-        }
-
-        if (i % 100 == 0) {
-            std::cout << "Iteration " << i << std::endl;
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    worker.wait();
-    worker.stop();
-
-    std::cout << std::endl << "=== Example 6: Async SNMP SET Operation ===" << std::endl;
+    std::cout << std::endl << "=== Example 5: Async SNMP SET Operation ===" << std::endl;
     {
         SnmpWorker worker;
         worker.start();
@@ -305,13 +208,14 @@ int main(int argc, char* argv[]) {
         std::cout << "Note: SET operations may fail if the SNMP agent is read-only" << std::endl;
     }
 
-    std::cout << std::endl << "=== Example 7: SNMP Trap Receiver (Optional) ===" << std::endl;
+    std::cout << std::endl << "=== Example 6: SNMP Trap Receiver ===" << std::endl;
     {
-        std::cout << "To demonstrate trap receiver, uncomment the code below and send a trap:" << std::endl;
+        std::cout << "To demonstrate trap receiver, send a trap:" << std::endl;
         std::cout << "Example: snmptrap -v 2c -c public localhost '' 1.3.6.1.4.1.8072.2.3.0.1 1.3.6.1.4.1.8072.2.3.2.1 i 123456" << std::endl;
         std::cout << std::endl;
 
         SnmpWorker worker;
+        worker.start();
 
         auto trapHandler = [](const SnmpTrap& trap) {
             std::cout << std::endl << "=== TRAP RECEIVED ===" << std::endl;
@@ -336,10 +240,11 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::seconds(10));
 
         worker.stopTrapReceiver();
+        worker.stop();
         std::cout << "Trap receiver example complete" << std::endl;
     }
 
-    std::cout << std::endl << "=== Example 8: SNMP INFORM Operation ===" << std::endl;
+    std::cout << std::endl << "=== Example 7: SNMP INFORM Operation ===" << std::endl;
     {
         SnmpWorker worker;
         worker.start();
@@ -348,12 +253,11 @@ int main(int argc, char* argv[]) {
         informTask.host = host;
         informTask.community = community;
         informTask.operation = SnmpOperation::INFORM;
-        informTask.trapOid = "1.3.6.1.4.1.8072.2.3.0.1";  // Example notification OID
+        informTask.trapOid = "1.3.6.1.4.1.8072.2.3.0.1";
 
-        // Add custom varbinds to the INFORM
         informTask.informVarbinds = {
-            {"1.3.6.1.4.1.8072.2.3.2.1", 'i', "12345"},       // Integer value
-            {"1.3.6.1.4.1.8072.2.3.2.2", 's', "Test Inform"}  // String value
+            {"1.3.6.1.4.1.8072.2.3.2.1", 'i', "12345"},
+            {"1.3.6.1.4.1.8072.2.3.2.2", 's', "Test Inform"}
         };
 
         informTask.informCallback = [](bool success, const std::string& message) {
@@ -378,14 +282,15 @@ int main(int argc, char* argv[]) {
     std::cout << "- SnmpSession supports both single OID and multi-OID GET" << std::endl;
     std::cout << "- SnmpWorker uses snmp_select for efficient async I/O" << std::endl;
     std::cout << "- Single thread handles all SNMP requests using select()" << std::endl;
+    std::cout << "- Unified API: always use vector for OIDs, single callback type" << std::endl;
     std::cout << "- Async SET operations for modifying SNMP values" << std::endl;
     std::cout << "- Async INFORM operations with acknowledgment" << std::endl;
     std::cout << "- Built-in SNMP trap receiver for monitoring notifications" << std::endl;
     std::cout << "- Better performance with concurrent requests" << std::endl;
 
     snmp_shutdown("ThreadingSnmp");
-    shutdown_mib();  // Clean up MIB structures
-    netsnmp_container_free_list();  // Clean up container structures
+    shutdown_mib();
+    netsnmp_container_free_list();
     SOCK_CLEANUP;
     return 0;
 }

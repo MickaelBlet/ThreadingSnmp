@@ -35,22 +35,19 @@ struct SnmpVarbind {
 struct SnmpTask {
     std::string host;
     std::string community;
-    std::string oid;
-    std::vector<std::string> oids;
+    std::vector<std::string> oids;  // Always use vector, even for single OID
     std::vector<SnmpSetValue> setValues;
     std::vector<SnmpVarbind> informVarbinds;
     std::string trapOid;
-    std::function<void(const std::string&, const std::string&)> callback;
-    std::function<void(const std::vector<std::pair<std::string, std::string>>&)> multiCallback;
+    std::function<void(const std::vector<std::pair<std::string, std::string>>&)> callback;  // Unified callback
     std::function<void(bool, const std::string&)> setCallback;
     std::function<void(bool, const std::string&)> informCallback;
     int version;
-    bool isMultiOid;
     SnmpOperation operation;
     long timeout;   // Timeout in microseconds
     int retries;    // Number of retries
 
-    SnmpTask() : version(SNMP_VERSION_2c), isMultiOid(false), operation(SnmpOperation::GET), timeout(1000000), retries(3) {}
+    SnmpTask() : version(SNMP_VERSION_2c), operation(SnmpOperation::GET), timeout(1000000), retries(3) {}
 };
 
 struct SnmpTrap {
@@ -74,25 +71,6 @@ public:
     void start();
     void stop();
     void addTask(const SnmpTask& task);
-
-    // Convenience method for single-OID async GET
-    void addTask(const std::string& host,
-                 const std::string& community,
-                 const std::string& oid,
-                 std::function<void(const std::string&, const std::string&)> callback,
-                 int version = SNMP_VERSION_2c,
-                 long timeout = 1000000,  // 1 second in microseconds
-                 int retries = 3);
-
-    // Convenience method for multi-OID async GET
-    void addTask(const std::string& host,
-                 const std::string& community,
-                 const std::vector<std::string>& oids,
-                 std::function<void(const std::vector<std::pair<std::string, std::string>>&)> multiCallback,
-                 int version = SNMP_VERSION_2c,
-                 long timeout = 1000000,  // 1 second in microseconds
-                 int retries = 3);
-
     void wait();
 
     void startTrapReceiver(int port = 162, const std::function<void(const SnmpTrap&)>& callback = nullptr);

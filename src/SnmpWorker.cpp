@@ -62,44 +62,6 @@ void SnmpWorker::addTask(const SnmpTask& task) {
     queueCondition_.notify_one();
 }
 
-void SnmpWorker::addTask(const std::string& host,
-                         const std::string& community,
-                         const std::string& oid,
-                         std::function<void(const std::string&, const std::string&)> callback,
-                         int version,
-                         long timeout,
-                         int retries) {
-    SnmpTask task;
-    task.host = host;
-    task.community = community;
-    task.oid = oid;
-    task.callback = callback;
-    task.version = version;
-    task.timeout = timeout;
-    task.retries = retries;
-    task.isMultiOid = false;
-    addTask(task);
-}
-
-void SnmpWorker::addTask(const std::string& host,
-                         const std::string& community,
-                         const std::vector<std::string>& oids,
-                         std::function<void(const std::vector<std::pair<std::string, std::string>>&)> multiCallback,
-                         int version,
-                         long timeout,
-                         int retries) {
-    SnmpTask task;
-    task.host = host;
-    task.community = community;
-    task.oids = oids;
-    task.multiCallback = multiCallback;
-    task.version = version;
-    task.timeout = timeout;
-    task.retries = retries;
-    task.isMultiOid = true;
-    addTask(task);
-}
-
 void SnmpWorker::wait() {
     std::unique_lock<std::mutex> lock(queueMutex_);
     completionCondition_.wait(lock, [this]() {
@@ -135,7 +97,8 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                 if (context->task.informCallback) {
                     context->task.informCallback(true, "INFORM acknowledged");
                 }
-            } else if (context->task.isMultiOid) {
+            } else {
+                // GET operation - always use vector callback
                 std::vector<std::pair<std::string, std::string>> results;
                 size_t idx = 0;
                 for (netsnmp_variable_list* vars = pdu->variables;
@@ -145,16 +108,8 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                     snprint_value(buf, sizeof(buf), vars->name, vars->name_length, vars);
                     results.push_back({context->task.oids[idx], std::string(buf)});
                 }
-                if (context->task.multiCallback) {
-                    context->task.multiCallback(results);
-                }
-            } else {
-                for (netsnmp_variable_list* vars = pdu->variables; vars != nullptr; vars = vars->next_variable) {
-                    char buf[1024];
-                    snprint_value(buf, sizeof(buf), vars->name, vars->name_length, vars);
-                    if (context->task.callback) {
-                        context->task.callback(context->task.oid, std::string(buf));
-                    }
+                if (context->task.callback) {
+                    context->task.callback(results);
                 }
             }
         } else {
@@ -163,17 +118,18 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                 if (context->task.setCallback) {
                     context->task.setCallback(false, errorMsg);
                 }
-            } else if (context->task.isMultiOid) {
+            } else if (context->task.operation == SnmpOperation::INFORM) {
+                if (context->task.informCallback) {
+                    context->task.informCallback(false, errorMsg);
+                }
+            } else {
+                // GET operation error - return error for all OIDs
                 std::vector<std::pair<std::string, std::string>> results;
                 for (const auto& oid : context->task.oids) {
                     results.push_back({oid, errorMsg});
                 }
-                if (context->task.multiCallback) {
-                    context->task.multiCallback(results);
-                }
-            } else {
                 if (context->task.callback) {
-                    context->task.callback(context->task.oid, errorMsg);
+                    context->task.callback(results);
                 }
             }
         }
@@ -187,17 +143,14 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
             if (context->task.informCallback) {
                 context->task.informCallback(false, errorMsg);
             }
-        } else if (context->task.isMultiOid) {
+        } else {
+            // GET operation timeout - return error for all OIDs
             std::vector<std::pair<std::string, std::string>> results;
             for (const auto& oid : context->task.oids) {
                 results.push_back({oid, errorMsg});
             }
-            if (context->task.multiCallback) {
-                context->task.multiCallback(results);
-            }
-        } else {
             if (context->task.callback) {
-                context->task.callback(context->task.oid, errorMsg);
+                context->task.callback(results);
             }
         }
     }
@@ -264,17 +217,14 @@ void SnmpWorker::processTask(const SnmpTask& task) {
             if (task.informCallback) {
                 task.informCallback(false, errorMsg);
             }
-        } else if (task.isMultiOid) {
+        } else {
+            // GET operation - return error for all OIDs
             std::vector<std::pair<std::string, std::string>> results;
             for (const auto& oid : task.oids) {
                 results.push_back({oid, errorMsg});
             }
-            if (task.multiCallback) {
-                task.multiCallback(results);
-            }
-        } else {
             if (task.callback) {
-                task.callback(task.oid, errorMsg);
+                task.callback(results);
             }
         }
         activeTasks_.fetch_sub(1);
@@ -346,19 +296,12 @@ void SnmpWorker::processTask(const SnmpTask& task) {
             }
         }
     } else {
+        // GET operation - always use oids vector
         pdu = snmp_pdu_create(SNMP_MSG_GET);
-        if (task.isMultiOid) {
-            for (const auto& oidStr : task.oids) {
-                oid oidArray[MAX_OID_LEN];
-                size_t oidLen = MAX_OID_LEN;
-                if (read_objid(oidStr.c_str(), oidArray, &oidLen)) {
-                    snmp_add_null_var(pdu, oidArray, oidLen);
-                }
-            }
-        } else {
+        for (const auto& oidStr : task.oids) {
             oid oidArray[MAX_OID_LEN];
             size_t oidLen = MAX_OID_LEN;
-            if (read_objid(task.oid.c_str(), oidArray, &oidLen)) {
+            if (read_objid(oidStr.c_str(), oidArray, &oidLen)) {
                 snmp_add_null_var(pdu, oidArray, oidLen);
             }
         }
@@ -375,17 +318,14 @@ void SnmpWorker::processTask(const SnmpTask& task) {
             if (task.informCallback) {
                 task.informCallback(false, errorMsg);
             }
-        } else if (task.isMultiOid) {
+        } else {
+            // GET operation - return error for all OIDs
             std::vector<std::pair<std::string, std::string>> results;
             for (const auto& oid : task.oids) {
                 results.push_back({oid, errorMsg});
             }
-            if (task.multiCallback) {
-                task.multiCallback(results);
-            }
-        } else {
             if (task.callback) {
-                task.callback(task.oid, errorMsg);
+                task.callback(results);
             }
         }
 
