@@ -131,6 +131,10 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                 if (context->task.setCallback) {
                     context->task.setCallback(true, "Success");
                 }
+            } else if (context->task.operation == SnmpOperation::INFORM) {
+                if (context->task.informCallback) {
+                    context->task.informCallback(true, "INFORM acknowledged");
+                }
             } else if (context->task.isMultiOid) {
                 std::vector<std::pair<std::string, std::string>> results;
                 size_t idx = 0;
@@ -178,6 +182,10 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
         if (context->task.operation == SnmpOperation::SET) {
             if (context->task.setCallback) {
                 context->task.setCallback(false, errorMsg);
+            }
+        } else if (context->task.operation == SnmpOperation::INFORM) {
+            if (context->task.informCallback) {
+                context->task.informCallback(false, errorMsg);
             }
         } else if (context->task.isMultiOid) {
             std::vector<std::pair<std::string, std::string>> results;
@@ -248,7 +256,15 @@ void SnmpWorker::processTask(const SnmpTask& task) {
         free(peername_to_free);
         free(community_to_free);
         std::string errorMsg = "ERROR: Failed to open session";
-        if (task.isMultiOid) {
+        if (task.operation == SnmpOperation::SET) {
+            if (task.setCallback) {
+                task.setCallback(false, errorMsg);
+            }
+        } else if (task.operation == SnmpOperation::INFORM) {
+            if (task.informCallback) {
+                task.informCallback(false, errorMsg);
+            }
+        } else if (task.isMultiOid) {
             std::vector<std::pair<std::string, std::string>> results;
             for (const auto& oid : task.oids) {
                 results.push_back({oid, errorMsg});
@@ -296,6 +312,39 @@ void SnmpWorker::processTask(const SnmpTask& task) {
                 }
             }
         }
+    } else if (task.operation == SnmpOperation::INFORM) {
+        pdu = snmp_pdu_create(SNMP_MSG_INFORM);
+
+        // Add sysUpTime.0 (required for INFORM)
+        oid uptime_oid[MAX_OID_LEN];
+        size_t uptime_oid_len = MAX_OID_LEN;
+        if (read_objid("1.3.6.1.2.1.1.3.0", uptime_oid, &uptime_oid_len)) {
+            long uptime = 0;  // Could be populated from actual system uptime
+            snmp_pdu_add_variable(pdu, uptime_oid, uptime_oid_len, ASN_TIMETICKS, (u_char*)&uptime, sizeof(uptime));
+        }
+
+        // Add snmpTrapOID.0 (required for INFORM)
+        oid trap_oid[MAX_OID_LEN];
+        size_t trap_oid_len = MAX_OID_LEN;
+        if (read_objid("1.3.6.1.6.3.1.1.4.1.0", trap_oid, &trap_oid_len)) {
+            oid notification_oid[MAX_OID_LEN];
+            size_t notification_oid_len = MAX_OID_LEN;
+            if (read_objid(task.trapOid.c_str(), notification_oid, &notification_oid_len)) {
+                snmp_pdu_add_variable(pdu, trap_oid, trap_oid_len, ASN_OBJECT_ID,
+                                     (u_char*)notification_oid, notification_oid_len * sizeof(oid));
+            }
+        }
+
+        // Add custom varbinds
+        for (const auto& varbind : task.informVarbinds) {
+            oid oidArray[MAX_OID_LEN];
+            size_t oidLen = MAX_OID_LEN;
+            if (read_objid(varbind.oid.c_str(), oidArray, &oidLen)) {
+                if (snmp_add_var(pdu, oidArray, oidLen, varbind.type, varbind.value.c_str()) != 0) {
+                    std::cerr << "Failed to add INFORM varbind: " << varbind.oid << std::endl;
+                }
+            }
+        }
     } else {
         pdu = snmp_pdu_create(SNMP_MSG_GET);
         if (task.isMultiOid) {
@@ -321,6 +370,10 @@ void SnmpWorker::processTask(const SnmpTask& task) {
         if (task.operation == SnmpOperation::SET) {
             if (task.setCallback) {
                 task.setCallback(false, errorMsg);
+            }
+        } else if (task.operation == SnmpOperation::INFORM) {
+            if (task.informCallback) {
+                task.informCallback(false, errorMsg);
             }
         } else if (task.isMultiOid) {
             std::vector<std::pair<std::string, std::string>> results;

@@ -16,10 +16,17 @@
 
 enum class SnmpOperation {
     GET,
-    SET
+    SET,
+    INFORM
 };
 
 struct SnmpSetValue {
+    std::string oid;
+    char type;
+    std::string value;
+};
+
+struct SnmpVarbind {
     std::string oid;
     char type;
     std::string value;
@@ -31,9 +38,12 @@ struct SnmpTask {
     std::string oid;
     std::vector<std::string> oids;
     std::vector<SnmpSetValue> setValues;
+    std::vector<SnmpVarbind> informVarbinds;
+    std::string trapOid;
     std::function<void(const std::string&, const std::string&)> callback;
     std::function<void(const std::vector<std::pair<std::string, std::string>>&)> multiCallback;
     std::function<void(bool, const std::string&)> setCallback;
+    std::function<void(bool, const std::string&)> informCallback;
     int version;
     bool isMultiOid;
     SnmpOperation operation;

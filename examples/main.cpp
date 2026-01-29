@@ -339,6 +339,39 @@ int main(int argc, char* argv[]) {
         std::cout << "Trap receiver example complete" << std::endl;
     }
 
+    std::cout << std::endl << "=== Example 8: SNMP INFORM Operation ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        SnmpTask informTask;
+        informTask.host = host;
+        informTask.community = community;
+        informTask.operation = SnmpOperation::INFORM;
+        informTask.trapOid = "1.3.6.1.4.1.8072.2.3.0.1";  // Example notification OID
+
+        // Add custom varbinds to the INFORM
+        informTask.informVarbinds = {
+            {"1.3.6.1.4.1.8072.2.3.2.1", 'i', "12345"},       // Integer value
+            {"1.3.6.1.4.1.8072.2.3.2.2", 's', "Test Inform"}  // String value
+        };
+
+        informTask.informCallback = [](bool success, const std::string& message) {
+            if (success) {
+                std::cout << "INFORM operation succeeded: " << message << std::endl;
+            } else {
+                std::cout << "INFORM operation failed: " << message << std::endl;
+            }
+        };
+
+        worker.addTask(informTask);
+        worker.wait();
+        worker.stop();
+
+        std::cout << "Note: INFORM requires an SNMP manager to acknowledge the notification" << std::endl;
+        std::cout << "Unlike TRAPs, INFORMs are acknowledged and retransmitted if lost" << std::endl;
+    }
+
     std::cout << std::endl << "=== Demo Complete ===" << std::endl;
     std::cout << std::endl;
     std::cout << "Summary:" << std::endl;
@@ -346,6 +379,7 @@ int main(int argc, char* argv[]) {
     std::cout << "- SnmpWorker uses snmp_select for efficient async I/O" << std::endl;
     std::cout << "- Single thread handles all SNMP requests using select()" << std::endl;
     std::cout << "- Async SET operations for modifying SNMP values" << std::endl;
+    std::cout << "- Async INFORM operations with acknowledgment" << std::endl;
     std::cout << "- Built-in SNMP trap receiver for monitoring notifications" << std::endl;
     std::cout << "- Better performance with concurrent requests" << std::endl;
 

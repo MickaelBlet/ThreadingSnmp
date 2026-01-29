@@ -16,6 +16,7 @@ This project provides a thread-safe wrapper around the net-snmp library, enablin
 - Thread-safe SNMP session handling
 - **Multi-OID GET support**: Query multiple OIDs in a single SNMP request
 - **Async SET operations**: Modify SNMP values asynchronously
+- **Async INFORM operations**: Send acknowledged SNMP notifications
 - **SNMP Trap Receiver**: Built-in trap/inform listener for monitoring notifications
 - **snmp_select based architecture**: Efficient async I/O using a single select thread
 - Support for SNMPv1, SNMPv2c, and SNMPv3
@@ -237,6 +238,51 @@ snmptrap -v 2c -c public localhost '' 1.3.6.1.4.1.8072.2.3.0.1 \
     1.3.6.1.4.1.8072.2.3.2.1 i 123456
 ```
 
+#### SNMP INFORM Operation
+
+```cpp
+#include "SnmpWorker.h"
+
+SnmpWorker worker;
+worker.start();
+
+SnmpTask informTask;
+informTask.host = "localhost";
+informTask.community = "public";
+informTask.operation = SnmpOperation::INFORM;
+informTask.trapOid = "1.3.6.1.4.1.8072.2.3.0.1";  // Notification OID
+
+// Add custom varbinds (optional)
+informTask.informVarbinds = {
+    {"1.3.6.1.4.1.8072.2.3.2.1", 'i', "12345"},       // Integer
+    {"1.3.6.1.4.1.8072.2.3.2.2", 's', "Test Inform"}  // String
+};
+
+informTask.informCallback = [](bool success, const std::string& message) {
+    if (success) {
+        std::cout << "INFORM acknowledged: " << message << std::endl;
+    } else {
+        std::cout << "INFORM failed: " << message << std::endl;
+    }
+};
+
+worker.addTask(informTask);
+worker.wait();
+worker.stop();
+```
+
+**INFORM vs TRAP:**
+- **INFORM**: Acknowledged notification - manager must send response
+- **TRAP**: Fire-and-forget notification - no acknowledgment required
+- INFORMs are more reliable but require more network overhead
+- Use INFORM when you need confirmation that notification was received
+- Use TRAP for high-volume, best-effort notifications
+
+**Required OIDs for INFORM:**
+- `1.3.6.1.2.1.1.3.0` - sysUpTime.0 (automatically added)
+- `1.3.6.1.6.3.1.1.4.1.0` - snmpTrapOID.0 (automatically added)
+- Custom varbinds can be added via `informVarbinds`
+
 ## Architecture
 
 ### SnmpSession Class
@@ -257,9 +303,10 @@ Provides asynchronous SNMP operations using **snmp_select**:
 - Asynchronous SNMP requests with `snmp_send()` and callbacks
 - Support for both single-OID and multi-OID async GET requests
 - **Support for async SET operations** - modify SNMP values asynchronously
+- **Support for async INFORM operations** - send acknowledged notifications
 - **Built-in SNMP trap receiver** - listen for trap/inform notifications
 - Task queue with condition variables
-- Callback-based result handling (single, multi, and SET callbacks)
+- Callback-based result handling (GET, SET, INFORM, and trap callbacks)
 - Separate trap receiver thread for monitoring
 - Graceful shutdown and cleanup
 - Better resource usage compared to thread-per-request approach
