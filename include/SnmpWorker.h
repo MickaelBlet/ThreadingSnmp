@@ -115,12 +115,10 @@ private:
 
     void selectThread();
     void processTask(const SnmpTask& task);
-    void trapReceiverThread();
     static int asyncCallback(int operation, netsnmp_session* session, int reqid, netsnmp_pdu* pdu, void* magic);
     static int trapCallback(int operation, netsnmp_session* session, int reqid, netsnmp_pdu* pdu, void* magic);
 
     std::thread selectThread_;
-    std::thread trapThread_;
     std::queue<SnmpTask> taskQueue_;
     std::mutex queueMutex_;
     std::condition_variable queueCondition_;

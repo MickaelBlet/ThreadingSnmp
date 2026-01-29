@@ -522,29 +522,6 @@ void SnmpWorker::startTrapReceiver(int port, const std::function<void(const Snmp
         return;
     }
 
-    trapCallback_ = callback;
-    trapRunning_.store(true);
-    trapThread_ = std::thread(&SnmpWorker::trapReceiverThread, this);
-}
-
-void SnmpWorker::stopTrapReceiver() {
-    if (!trapRunning_.load()) {
-        return;
-    }
-
-    trapRunning_.store(false);
-
-    if (trapThread_.joinable()) {
-        trapThread_.join();
-    }
-
-    if (trapSession_) {
-        snmp_close(trapSession_);
-        trapSession_ = nullptr;
-    }
-}
-
-void SnmpWorker::trapReceiverThread() {
     netsnmp_session session;
     snmp_sess_init(&session);
 
@@ -561,33 +538,25 @@ void SnmpWorker::trapReceiverThread() {
 
     if (!trapSession_) {
         std::cerr << "Failed to open trap receiver session" << std::endl;
-        trapRunning_.store(false);
         return;
     }
 
+    trapCallback_ = callback;
+    trapRunning_.store(true);
     std::cout << "SNMP Trap receiver started on port 162" << std::endl;
+}
 
-    while (trapRunning_.load()) {
-        int fds = 0;
-        fd_set fdset;
-        struct timeval timeout;
-        int block = 1;
-
-        FD_ZERO(&fdset);
-        snmp_select_info(&fds, &fdset, &timeout, &block);
-
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 100000;
-
-        if (fds > 0) {
-            int count = select(fds, &fdset, nullptr, nullptr, &timeout);
-            if (count > 0) {
-                snmp_read(&fdset);
-            } else if (count == 0) {
-                snmp_timeout();
-            }
-        }
+void SnmpWorker::stopTrapReceiver() {
+    if (!trapRunning_.load()) {
+        return;
     }
 
-    std::cout << "SNMP Trap receiver stopped" << std::endl;
+    trapRunning_.store(false);
+
+    if (trapSession_) {
+        snmp_close(trapSession_);
+        trapSession_ = nullptr;
+        std::cout << "SNMP Trap receiver stopped" << std::endl;
+    }
 }
+

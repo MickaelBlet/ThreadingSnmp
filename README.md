@@ -307,7 +307,7 @@ Provides asynchronous SNMP operations using **snmp_select**:
 - **Built-in SNMP trap receiver** - listen for trap/inform notifications
 - Task queue with condition variables
 - Callback-based result handling (GET, SET, INFORM, and trap callbacks)
-- Separate trap receiver thread for monitoring
+- **Unified thread architecture** - single thread handles both outgoing operations and incoming traps
 - Graceful shutdown and cleanup
 - Better resource usage compared to thread-per-request approach
 
@@ -352,10 +352,18 @@ The **snmp_select** approach used in this library is more efficient:
 1. Tasks are queued by the application
 2. Single select thread processes the queue
 3. For each task, an async SNMP request is sent using `snmp_send()`
-4. `snmp_select_info()` and `select()` monitor all active sessions
-5. When data arrives, `snmp_read()` processes responses
+4. `snmp_select_info()` and `select()` monitor all active sessions (including trap receiver if enabled)
+5. When data arrives, `snmp_read()` processes responses:
+   - Outgoing operations (GET/SET/INFORM) trigger asyncCallback
+   - Incoming traps/informs trigger trapCallback
 6. Callbacks are invoked with results
 7. Sessions are cleaned up automatically
+
+**Unified Thread Architecture:**
+- One thread handles both outgoing SNMP operations and incoming trap notifications
+- The trap receiver session is added to the same select() monitoring as task sessions
+- Eliminates the need for a separate trap receiver thread
+- More efficient resource usage and simpler architecture
 
 ## Thread Safety Considerations
 
