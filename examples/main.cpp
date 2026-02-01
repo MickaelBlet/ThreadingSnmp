@@ -103,9 +103,18 @@ int main(int argc, char* argv[]) {
             task.host = host;
             task.community = community;
             task.oids = {oid};  // Single OID in vector
-            task.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
-                for (const auto& result : results) {
-                    std::cout << "OID: " << result.first << " -> " << result.second << std::endl;
+            task.callback = [](netsnmp_variable_list* vars, size_t count) {
+                if (vars == nullptr) {
+                    std::cout << "ERROR: Failed to get response" << std::endl;
+                    return;
+                }
+                // Iterate through variable list
+                for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
+                    char oidBuf[256];
+                    char valBuf[1024];
+                    snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+                    snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+                    std::cout << "OID: " << oidBuf << " -> " << valBuf << std::endl;
                 }
             };
             worker.addTask(task);
@@ -146,10 +155,19 @@ int main(int argc, char* argv[]) {
         task1.host = host;
         task1.community = community;
         task1.oids = group1;
-        task1.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
+        task1.callback = [](netsnmp_variable_list* vars, size_t count) {
             std::cout << "Group 1 response:" << std::endl;
-            for (const auto& result : results) {
-                std::cout << "  " << result.first << " -> " << result.second << std::endl;
+            if (vars == nullptr) {
+                std::cout << "  ERROR: Failed to get response" << std::endl;
+                responseCount.fetch_add(1);
+                return;
+            }
+            for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
+                char oidBuf[256];
+                char valBuf[1024];
+                snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+                snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+                std::cout << "  " << oidBuf << " -> " << valBuf << std::endl;
             }
             responseCount.fetch_add(1);
         };
@@ -159,10 +177,19 @@ int main(int argc, char* argv[]) {
         task2.host = host;
         task2.community = community;
         task2.oids = group2;
-        task2.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
+        task2.callback = [](netsnmp_variable_list* vars, size_t count) {
             std::cout << "Group 2 response:" << std::endl;
-            for (const auto& result : results) {
-                std::cout << "  " << result.first << " -> " << result.second << std::endl;
+            if (vars == nullptr) {
+                std::cout << "  ERROR: Failed to get response" << std::endl;
+                responseCount.fetch_add(1);
+                return;
+            }
+            for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
+                char oidBuf[256];
+                char valBuf[1024];
+                snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+                snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+                std::cout << "  " << oidBuf << " -> " << valBuf << std::endl;
             }
             responseCount.fetch_add(1);
         };
@@ -229,8 +256,13 @@ int main(int argc, char* argv[]) {
                 std::cout << "Uptime: " << trap.uptime << std::endl;
             }
             std::cout << "Varbinds:" << std::endl;
-            for (const auto& vb : trap.varbinds) {
-                std::cout << "  " << vb.first << " = " << vb.second << std::endl;
+            // Iterate through raw variable list
+            for (netsnmp_variable_list* v = trap.varbinds; v != nullptr; v = v->next_variable) {
+                char oidBuf[256];
+                char valBuf[1024];
+                snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+                snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+                std::cout << "  " << oidBuf << " = " << valBuf << std::endl;
             }
             std::cout << "===================" << std::endl;
         };
@@ -245,10 +277,18 @@ int main(int argc, char* argv[]) {
             task.host = host;
             task.community = community;
             task.oids = {"1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0"};
-            task.callback = [i](const std::vector<std::pair<std::string, std::string>>& results) {
+            task.callback = [i](netsnmp_variable_list* vars, size_t count) {
                 std::cout << "GET request " << (i + 1) << " completed while trap receiver is active:" << std::endl;
-                for (const auto& result : results) {
-                    std::cout << "  " << result.first << " -> " << result.second << std::endl;
+                if (vars == nullptr) {
+                    std::cout << "  ERROR: Failed to get response" << std::endl;
+                    return;
+                }
+                for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
+                    char oidBuf[256];
+                    char valBuf[1024];
+                    snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+                    snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+                    std::cout << "  " << oidBuf << " -> " << valBuf << std::endl;
                 }
             };
             worker.addTask(task);

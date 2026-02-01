@@ -130,9 +130,18 @@ SnmpTask task;
 task.host = "localhost";
 task.community = "public";
 task.oids = {"1.3.6.1.2.1.1.1.0"};  // Single OID in vector
-task.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
-    for (const auto& result : results) {
-        std::cout << result.first << " -> " << result.second << std::endl;
+task.callback = [](netsnmp_variable_list* vars, size_t count) {
+    if (vars == nullptr) {
+        std::cout << "ERROR: Request failed" << std::endl;
+        return;
+    }
+    // Iterate through raw variable list for direct access to SNMP data
+    for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
+        char oidBuf[256];
+        char valBuf[1024];
+        snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+        snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+        std::cout << oidBuf << " -> " << valBuf << std::endl;
     }
 };
 
@@ -154,9 +163,18 @@ SnmpTask task;
 task.host = "localhost";
 task.community = "public";
 task.oids = {"1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.3.0", "1.3.6.1.2.1.1.5.0"};
-task.callback = [](const std::vector<std::pair<std::string, std::string>>& results) {
-    for (const auto& result : results) {
-        std::cout << result.first << " -> " << result.second << std::endl;
+task.callback = [](netsnmp_variable_list* vars, size_t count) {
+    if (vars == nullptr) {
+        std::cout << "ERROR: Request failed" << std::endl;
+        return;
+    }
+    // Direct access to netsnmp_variable_list for full control
+    for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
+        char oidBuf[256];
+        char valBuf[1024];
+        snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+        snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+        std::cout << oidBuf << " -> " << valBuf << std::endl;
     }
 };
 
@@ -215,14 +233,18 @@ The trap receiver can run concurrently with GET/SET/INFORM operations - they all
 SnmpWorker worker;
 worker.start();
 
-// Define trap handler callback
+// Define trap handler callback with raw variable list access
 auto trapHandler = [](const SnmpTrap& trap) {
     std::cout << "Trap received from: " << trap.sourceIp << std::endl;
     std::cout << "Community: " << trap.community << std::endl;
 
-    // All varbinds from the trap/inform are available
-    for (const auto& varbind : trap.varbinds) {
-        std::cout << "  " << varbind.first << " = " << varbind.second << std::endl;
+    // Direct access to varbinds via netsnmp_variable_list*
+    for (netsnmp_variable_list* v = trap.varbinds; v != nullptr; v = v->next_variable) {
+        char oidBuf[256];
+        char valBuf[1024];
+        snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+        snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+        std::cout << "  " << oidBuf << " = " << valBuf << std::endl;
     }
 };
 
@@ -234,8 +256,8 @@ SnmpTask task;
 task.host = "192.168.1.1";
 task.community = "public";
 task.oids = {"1.3.6.1.2.1.1.1.0"};
-task.callback = [](const auto& results) {
-    // Process results...
+task.callback = [](netsnmp_variable_list* vars, size_t count) {
+    // Process vars directly...
 };
 worker.addTask(task);  // This works concurrently with trap receiver
 

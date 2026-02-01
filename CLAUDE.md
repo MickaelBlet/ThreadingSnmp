@@ -90,17 +90,18 @@ Select thread workflow (src/SnmpWorker.cpp:263-295):
 5. When data arrives, call `snmp_read()` which triggers callbacks
 6. `asyncCallback()` handles responses, cleans up sessions, decrements `activeTasks_`
 
-### SnmpTask Structure (include/SnmpWorker.h:17-28)
+### SnmpTask Structure (include/SnmpWorker.h:35-51)
 
 Encapsulates a single async SNMP request:
 
-- **Single-OID mode**: Set `isMultiOid = false`, populate `oid` and `callback`
-- **Multi-OID mode**: Set `isMultiOid = true`, populate `oids` and `multiCallback`
-- Common fields: `host`, `community`, `version` (default: SNMPv2c)
+- **Unified API**: Always use `oids` vector (for single or multiple OIDs)
+- **Raw variable list**: Callback receives `netsnmp_variable_list*` directly for full SNMP data access
+- Common fields: `host`, `community`, `version` (default: SNMPv2c), `operation` (GET/SET/INFORM)
 
 Callbacks:
-- Single-OID: `std::function<void(const std::string& oid, const std::string& result)>`
-- Multi-OID: `std::function<void(const std::vector<std::pair<std::string, std::string>>& results)>`
+- GET: `std::function<void(netsnmp_variable_list* vars, size_t count)>` - Direct access to raw SNMP data
+- SET: `std::function<void(bool success, const std::string& message)>` - Success/failure notification
+- INFORM: `std::function<void(bool success, const std::string& message)>` - Acknowledgment status
 
 ### Thread Safety Model
 
@@ -115,7 +116,9 @@ Callbacks:
 ### Error Handling
 
 - Synchronous methods (SnmpSession): Return error strings prefixed with "ERROR:"
-- Async methods (SnmpWorker): Deliver errors via callbacks with "ERROR:" prefix
+- Async methods (SnmpWorker):
+  - GET operation errors: Callback receives `nullptr` for variable list parameter
+  - SET/INFORM errors: Callback receives `false` with error message
 - Common error scenarios handled:
   - Session open failure: "ERROR: Failed to open session"
   - Invalid OID: "ERROR: Invalid OID"
@@ -145,26 +148,43 @@ if (session.open()) {
 SnmpWorker worker;
 worker.start();
 
-// Single-OID task
+// Single-OID task (unified API - always use vector)
 SnmpTask task;
 task.host = "192.168.1.1";
 task.community = "public";
-task.oid = "1.3.6.1.2.1.1.1.0";
-task.isMultiOid = false;
-task.callback = [](const std::string& oid, const std::string& result) {
-    std::cout << oid << " -> " << result << std::endl;
+task.oids = {"1.3.6.1.2.1.1.1.0"};  // Single OID in vector
+task.callback = [](netsnmp_variable_list* vars, size_t count) {
+    if (vars == nullptr) {
+        std::cout << "ERROR: Request failed" << std::endl;
+        return;
+    }
+    // Direct access to raw SNMP data via netsnmp_variable_list*
+    for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
+        char oidBuf[256];
+        char valBuf[1024];
+        snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+        snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+        std::cout << oidBuf << " -> " << valBuf << std::endl;
+    }
 };
 worker.addTask(task);
 
-// Multi-OID task
+// Multi-OID task (same unified callback signature)
 SnmpTask multiTask;
 multiTask.host = "192.168.1.1";
 multiTask.community = "public";
 multiTask.oids = {"1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.3.0"};
-multiTask.isMultiOid = true;
-multiTask.multiCallback = [](const auto& results) {
-    for (const auto& [oid, value] : results) {
-        std::cout << oid << " -> " << value << std::endl;
+multiTask.callback = [](netsnmp_variable_list* vars, size_t count) {
+    if (vars == nullptr) {
+        std::cout << "ERROR: Request failed" << std::endl;
+        return;
+    }
+    for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
+        char oidBuf[256];
+        char valBuf[1024];
+        snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+        snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+        std::cout << oidBuf << " -> " << valBuf << std::endl;
     }
 };
 worker.addTask(multiTask);

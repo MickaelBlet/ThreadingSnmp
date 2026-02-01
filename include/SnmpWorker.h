@@ -39,7 +39,7 @@ struct SnmpTask {
     std::vector<SnmpSetValue> setValues;
     std::vector<SnmpVarbind> informVarbinds;
     std::string trapOid;
-    std::function<void(const std::vector<std::pair<std::string, std::string>>&)> callback;  // Unified callback
+    std::function<void(netsnmp_variable_list*, size_t)> callback;  // Raw variable list and count
     std::function<void(bool, const std::string&)> setCallback;
     std::function<void(bool, const std::string&)> informCallback;
     int version;
@@ -56,7 +56,7 @@ struct SnmpTrap {
     std::string enterpriseOid;
     int genericTrap;
     int specificTrap;
-    std::vector<std::pair<std::string, std::string>> varbinds;
+    netsnmp_variable_list* varbinds;  // Raw variable list pointer
     unsigned long uptime;
 };
 
