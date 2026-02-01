@@ -98,9 +98,16 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                     context->task.informCallback(true, "INFORM acknowledged");
                 }
             } else {
-                // GET operation - pass raw variable list
+                // GET operation - build OID to variable list mapping
+                std::vector<std::pair<std::string, netsnmp_variable_list*>> results;
+                size_t idx = 0;
+                for (netsnmp_variable_list* vars = pdu->variables;
+                     vars != nullptr && idx < context->task.oids.size();
+                     vars = vars->next_variable, ++idx) {
+                    results.push_back({context->task.oids[idx], vars});
+                }
                 if (context->task.callback) {
-                    context->task.callback(pdu->variables, context->task.oids.size());
+                    context->task.callback(results);
                 }
             }
         } else {
@@ -114,9 +121,10 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                     context->task.informCallback(false, errorMsg);
                 }
             } else {
-                // GET operation error - pass nullptr for variable list
+                // GET operation error - pass empty vector
                 if (context->task.callback) {
-                    context->task.callback(nullptr, context->task.oids.size());
+                    std::vector<std::pair<std::string, netsnmp_variable_list*>> emptyResults;
+                    context->task.callback(emptyResults);
                 }
             }
         }
@@ -131,9 +139,10 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                 context->task.informCallback(false, errorMsg);
             }
         } else {
-            // GET operation timeout - pass nullptr for variable list
+            // GET operation timeout - pass empty vector
             if (context->task.callback) {
-                context->task.callback(nullptr, context->task.oids.size());
+                std::vector<std::pair<std::string, netsnmp_variable_list*>> emptyResults;
+                context->task.callback(emptyResults);
             }
         }
     }
@@ -201,9 +210,10 @@ void SnmpWorker::processTask(const SnmpTask& task) {
                 task.informCallback(false, errorMsg);
             }
         } else {
-            // GET operation - pass nullptr for variable list on error
+            // GET operation - pass empty vector on error
             if (task.callback) {
-                task.callback(nullptr, task.oids.size());
+                std::vector<std::pair<std::string, netsnmp_variable_list*>> emptyResults;
+                task.callback(emptyResults);
             }
         }
         activeTasks_.fetch_sub(1);
@@ -298,9 +308,10 @@ void SnmpWorker::processTask(const SnmpTask& task) {
                 task.informCallback(false, errorMsg);
             }
         } else {
-            // GET operation - pass nullptr for variable list on error
+            // GET operation - pass empty vector on error
             if (task.callback) {
-                task.callback(nullptr, task.oids.size());
+                std::vector<std::pair<std::string, netsnmp_variable_list*>> emptyResults;
+                task.callback(emptyResults);
             }
         }
 

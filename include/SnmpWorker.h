@@ -39,7 +39,7 @@ struct SnmpTask {
     std::vector<SnmpSetValue> setValues;
     std::vector<SnmpVarbind> informVarbinds;
     std::string trapOid;
-    std::function<void(netsnmp_variable_list*, size_t)> callback;  // Raw variable list and count
+    std::function<void(const std::vector<std::pair<std::string, netsnmp_variable_list*>>&)> callback;  // OID to variable list mapping
     std::function<void(bool, const std::string&)> setCallback;
     std::function<void(bool, const std::string&)> informCallback;
     int version;

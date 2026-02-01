@@ -130,18 +130,16 @@ SnmpTask task;
 task.host = "localhost";
 task.community = "public";
 task.oids = {"1.3.6.1.2.1.1.1.0"};  // Single OID in vector
-task.callback = [](netsnmp_variable_list* vars, size_t count) {
-    if (vars == nullptr) {
+task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+    if (results.empty()) {
         std::cout << "ERROR: Request failed" << std::endl;
         return;
     }
-    // Iterate through raw variable list for direct access to SNMP data
-    for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
-        char oidBuf[256];
+    // Iterate through OID-variable pairs for direct access to SNMP data
+    for (const auto& [oid, var] : results) {
         char valBuf[1024];
-        snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
-        snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
-        std::cout << oidBuf << " -> " << valBuf << std::endl;
+        snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+        std::cout << oid << " -> " << valBuf << std::endl;
     }
 };
 
@@ -163,18 +161,16 @@ SnmpTask task;
 task.host = "localhost";
 task.community = "public";
 task.oids = {"1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.3.0", "1.3.6.1.2.1.1.5.0"};
-task.callback = [](netsnmp_variable_list* vars, size_t count) {
-    if (vars == nullptr) {
+task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+    if (results.empty()) {
         std::cout << "ERROR: Request failed" << std::endl;
         return;
     }
-    // Direct access to netsnmp_variable_list for full control
-    for (netsnmp_variable_list* v = vars; v != nullptr; v = v->next_variable) {
-        char oidBuf[256];
+    // Direct access to netsnmp_variable_list via OID-variable pairs
+    for (const auto& [oid, var] : results) {
         char valBuf[1024];
-        snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
-        snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
-        std::cout << oidBuf << " -> " << valBuf << std::endl;
+        snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+        std::cout << oid << " -> " << valBuf << std::endl;
     }
 };
 
@@ -256,8 +252,8 @@ SnmpTask task;
 task.host = "192.168.1.1";
 task.community = "public";
 task.oids = {"1.3.6.1.2.1.1.1.0"};
-task.callback = [](netsnmp_variable_list* vars, size_t count) {
-    // Process vars directly...
+task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+    // Process OID-variable pairs...
 };
 worker.addTask(task);  // This works concurrently with trap receiver
 
