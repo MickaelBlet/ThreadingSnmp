@@ -207,16 +207,20 @@ worker.stop();
 
 #### SNMP Trap Receiver
 
+The trap receiver can run concurrently with GET/SET/INFORM operations - they all share the same select thread for efficient I/O multiplexing.
+
 ```cpp
 #include "SnmpWorker.h"
 
 SnmpWorker worker;
+worker.start();
 
 // Define trap handler callback
 auto trapHandler = [](const SnmpTrap& trap) {
     std::cout << "Trap received from: " << trap.sourceIp << std::endl;
     std::cout << "Community: " << trap.community << std::endl;
 
+    // All varbinds from the trap/inform are available
     for (const auto& varbind : trap.varbinds) {
         std::cout << "  " << varbind.first << " = " << varbind.second << std::endl;
     }
@@ -225,11 +229,23 @@ auto trapHandler = [](const SnmpTrap& trap) {
 // Start trap receiver on port 162 (default SNMP trap port)
 worker.startTrapReceiver(162, trapHandler);
 
-// Trap receiver runs in background...
-// Do other work or wait for traps
+// You can perform GET/SET operations while trap receiver is active!
+SnmpTask task;
+task.host = "192.168.1.1";
+task.community = "public";
+task.oids = {"1.3.6.1.2.1.1.1.0"};
+task.callback = [](const auto& results) {
+    // Process results...
+};
+worker.addTask(task);  // This works concurrently with trap receiver
+
+worker.wait();  // Wait for GET operations to complete
+
+// Trap receiver continues running in background...
 
 // Stop trap receiver when done
 worker.stopTrapReceiver();
+worker.stop();
 ```
 
 **Testing Trap Receiver:**

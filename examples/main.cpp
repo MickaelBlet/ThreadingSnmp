@@ -208,9 +208,10 @@ int main(int argc, char* argv[]) {
         std::cout << "Note: SET operations may fail if the SNMP agent is read-only" << std::endl;
     }
 
-    std::cout << std::endl << "=== Example 6: SNMP Trap Receiver ===" << std::endl;
+    std::cout << std::endl << "=== Example 6: Trap Receiver with Concurrent GET Operations ===" << std::endl;
     {
-        std::cout << "To demonstrate trap receiver, send a trap:" << std::endl;
+        std::cout << "This example shows you can use trap receiver and perform GET/SET operations simultaneously." << std::endl;
+        std::cout << "To test trap reception, send a trap from another terminal:" << std::endl;
         std::cout << "Example: snmptrap -v 2c -c public localhost '' 1.3.6.1.4.1.8072.2.3.0.1 1.3.6.1.4.1.8072.2.3.2.1 i 123456" << std::endl;
         std::cout << std::endl;
 
@@ -234,14 +235,35 @@ int main(int argc, char* argv[]) {
             std::cout << "===================" << std::endl;
         };
 
-        std::cout << "Starting trap receiver (will listen for 10 seconds)..." << std::endl;
+        std::cout << "Starting trap receiver on port 162..." << std::endl;
         worker.startTrapReceiver(162, trapHandler);
 
-        std::this_thread::sleep_for(std::chrono::seconds(10));
+        // Perform GET operations while trap receiver is running - they work concurrently!
+        std::cout << "Performing GET operations while trap receiver is active..." << std::endl;
+        for (int i = 0; i < 3; i++) {
+            SnmpTask task;
+            task.host = host;
+            task.community = community;
+            task.oids = {"1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0"};
+            task.callback = [i](const std::vector<std::pair<std::string, std::string>>& results) {
+                std::cout << "GET request " << (i + 1) << " completed while trap receiver is active:" << std::endl;
+                for (const auto& result : results) {
+                    std::cout << "  " << result.first << " -> " << result.second << std::endl;
+                }
+            };
+            worker.addTask(task);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+
+        std::cout << "Waiting for GET operations to complete..." << std::endl;
+        worker.wait();
+
+        std::cout << "Trap receiver still running (waiting 5 more seconds for traps)..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
 
         worker.stopTrapReceiver();
         worker.stop();
-        std::cout << "Trap receiver example complete" << std::endl;
+        std::cout << "Trap receiver and worker stopped successfully" << std::endl;
     }
 
     std::cout << std::endl << "=== Example 7: SNMP INFORM Operation ===" << std::endl;

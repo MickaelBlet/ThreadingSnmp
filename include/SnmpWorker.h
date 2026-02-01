@@ -107,6 +107,7 @@ private:
     std::mutex sessionMutex_;
     std::map<void*, std::shared_ptr<SessionContext>> activeSessions_;
     std::queue<SessionCleanup> sessionsToClose_;
+    std::mutex trapMutex_;
     std::function<void(const SnmpTrap&)> trapCallback_;
     netsnmp_session* trapSession_;
 };

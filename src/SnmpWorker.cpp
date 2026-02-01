@@ -388,10 +388,14 @@ void SnmpWorker::selectThread() {
                 SessionCleanup cleanup = sessionsToClose_.front();
                 sessionsToClose_.pop();
 
-                // Close the session and free the allocated strings
+                // Close the session and free the allocated strings (if they exist)
                 snmp_close(cleanup.session);
-                free(cleanup.peername);
-                free(cleanup.community);
+                if (cleanup.peername) {
+                    free(cleanup.peername);
+                }
+                if (cleanup.community) {
+                    free(cleanup.community);
+                }
             }
         }
     }
@@ -457,6 +461,8 @@ int SnmpWorker::trapCallback(int operation, netsnmp_session* session, int reqid,
 }
 
 void SnmpWorker::startTrapReceiver(int port, const std::function<void(const SnmpTrap&)>& callback) {
+    std::lock_guard<std::mutex> trapLock(trapMutex_);
+
     if (trapRunning_.load()) {
         std::cerr << "Trap receiver already running" << std::endl;
         return;
@@ -493,8 +499,16 @@ void SnmpWorker::stopTrapReceiver() {
 
     trapRunning_.store(false);
 
+    std::lock_guard<std::mutex> trapLock(trapMutex_);
     if (trapSession_) {
-        snmp_close(trapSession_);
+        // Queue the trap session for safe cleanup by the select thread
+        std::lock_guard<std::mutex> sessionLock(sessionMutex_);
+        SessionCleanup cleanup;
+        cleanup.session = trapSession_;
+        cleanup.peername = nullptr;  // peername was already freed in startTrapReceiver
+        cleanup.community = nullptr;  // no community allocated for trap session
+        sessionsToClose_.push(cleanup);
+
         trapSession_ = nullptr;
         std::cout << "SNMP Trap receiver stopped" << std::endl;
     }
