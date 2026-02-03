@@ -318,6 +318,57 @@ worker.stop();
 - `1.3.6.1.6.3.1.1.4.1.0` - snmpTrapOID.0 (automatically added)
 - Custom varbinds can be added via `informVarbinds`
 
+#### Multiple Workers (Concurrent Operation Types)
+
+You can run multiple SnmpWorker instances concurrently - each with its own select thread. This is useful when you want to dedicate workers to specific operation types (e.g., one for INFORM, one for GET).
+
+```cpp
+#include "SnmpWorker.h"
+
+// Worker 1: Dedicated to INFORM operations
+SnmpWorker informWorker;
+informWorker.start();
+
+// Worker 2: Dedicated to GET operations
+SnmpWorker getWorker;
+getWorker.start();
+
+// Launch INFORM tasks on worker 1
+SnmpTask informTask;
+informTask.operation = SnmpOperation::INFORM;
+informTask.host = "localhost";
+informTask.community = "public";
+informTask.trapOid = "1.3.6.1.4.1.8072.2.3.0.1";
+informTask.informCallback = [](bool success, const std::string& msg) {
+    std::cout << "INFORM: " << msg << std::endl;
+};
+informWorker.addTask(informTask);
+
+// Launch GET tasks on worker 2 (runs concurrently!)
+SnmpTask getTask;
+getTask.host = "localhost";
+getTask.community = "public";
+getTask.oids = {"1.3.6.1.2.1.1.1.0"};
+getTask.callback = [](const auto& results) {
+    // Process results...
+};
+getWorker.addTask(getTask);
+
+// Wait for both workers
+informWorker.wait();
+getWorker.wait();
+
+// Stop both workers
+informWorker.stop();
+getWorker.stop();
+```
+
+**Key Points:**
+- Each SnmpWorker has its own select thread and manages its own sessions
+- `snmp_select_info()` is thread-safe and can be called from multiple threads
+- Workers are completely independent and can run different operation types concurrently
+- See `examples/multi_worker_example.cpp` for a complete demonstration
+
 ## Architecture
 
 ### SnmpSession Class

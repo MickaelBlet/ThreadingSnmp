@@ -50,4 +50,13 @@ target_link_libraries(snmp_thread_example
     threading_snmp
 )
 
+add_executable(multi_worker_example
+    examples/multi_worker_example.cpp
+)
+
+target_link_libraries(multi_worker_example
+    PRIVATE
+    threading_snmp
+)
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0 -ggdb -Wall -Wextra -pthread")

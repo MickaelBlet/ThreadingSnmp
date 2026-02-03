@@ -15,14 +15,19 @@ cd build
 cmake ..
 make
 
-# Run the example
+# Run the examples
 ./snmp_thread_example <host> [community]
 ./snmp_thread_example localhost public
+
+# Multiple worker example (INFORM + GET concurrently)
+./multi_worker_example <host> [community]
+./multi_worker_example localhost public
 ```
 
 The build produces:
 - `libthreading_snmp.a` - Static library
 - `snmp_thread_example` - Example executable demonstrating all usage patterns
+- `multi_worker_example` - Example demonstrating multiple concurrent workers
 
 ## Dependencies
 
@@ -124,6 +129,41 @@ Callbacks:
   - Invalid OID: "ERROR: Invalid OID"
   - Timeout: "ERROR: Request timed out"
   - SNMP protocol errors: "ERROR: <snmp_errstring()>"
+
+### Multiple Workers
+
+You can run multiple SnmpWorker instances concurrently, each with its own select thread. This is useful for:
+- Dedicating workers to specific operation types (e.g., one for INFORM, one for GET)
+- Isolating different hosts or communities
+- Load balancing across multiple threads
+
+Key points:
+- Each SnmpWorker has its own `selectThread_` that independently calls `snmp_select_info()` and `select()`
+- `snmp_select_info()` is thread-safe - it collects file descriptors from all sessions in the global net-snmp session list
+- Workers are completely independent with separate task queues, sessions, and mutexes
+- No shared state between workers except the net-snmp global session list (which is thread-safe)
+
+Example:
+```cpp
+SnmpWorker informWorker;  // Dedicated to INFORM operations
+SnmpWorker getWorker;     // Dedicated to GET operations
+
+informWorker.start();
+getWorker.start();
+
+// Queue tasks to different workers
+informWorker.addTask(informTask);
+getWorker.addTask(getTask);
+
+// Both workers process tasks concurrently
+informWorker.wait();
+getWorker.wait();
+
+informWorker.stop();
+getWorker.stop();
+```
+
+See `examples/multi_worker_example.cpp` for a complete demonstration.
 
 ## Code Patterns
 
