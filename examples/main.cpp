@@ -80,7 +80,37 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    std::cout << std::endl << "=== Example 3: Async Single OID Requests ===" << std::endl;
+    std::cout << std::endl << "=== Example 3: Sync GETNEXT ===" << std::endl;
+    {
+        SnmpSession session(host, community);
+
+        if (session.open()) {
+            std::cout << "Session opened successfully" << std::endl;
+
+            // Single GETNEXT - returns the next OID after the requested one
+            auto result = session.getNext("1.3.6.1.2.1.1");
+            std::cout << "Next after 1.3.6.1.2.1.1 -> " << result.first << " = " << result.second << std::endl;
+
+            // Multi GETNEXT - walk from multiple starting points in one request
+            std::vector<std::string> startOids = {
+                "1.3.6.1.2.1.1.1",   // next after sysDescr subtree root
+                "1.3.6.1.2.1.1.3",   // next after sysUpTime subtree root
+                "1.3.6.1.2.1.1.5"    // next after sysName subtree root
+            };
+
+            auto results = session.getNextMulti(startOids);
+            std::cout << "Multi GETNEXT results:" << std::endl;
+            for (const auto& r : results) {
+                std::cout << "  " << r.first << " = " << r.second << std::endl;
+            }
+
+            session.close();
+        } else {
+            std::cout << "Failed to open session" << std::endl;
+        }
+    }
+
+    std::cout << std::endl << "=== Example 4: Async Single OID Requests ===" << std::endl;
     {
         SnmpWorker worker;
         worker.start();
@@ -129,7 +159,7 @@ int main(int argc, char* argv[]) {
         worker.stop();
     }
 
-    std::cout << std::endl << "=== Example 4: Async Multi-OID GET ===" << std::endl;
+    std::cout << std::endl << "=== Example 5: Async Multi-OID GET ===" << std::endl;
     {
         responseCount.store(0);
         SnmpWorker worker;
@@ -201,7 +231,60 @@ int main(int argc, char* argv[]) {
         worker.stop();
     }
 
-    std::cout << std::endl << "=== Example 5: Async SNMP SET Operation ===" << std::endl;
+    std::cout << std::endl << "=== Example 6: Async GETNEXT ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        // Walk forward from 1.3.6.1.2.1.1 — each task gets the next OID
+        // Note: the OID in each result pair is the ACTUAL response OID, not the requested one
+        std::vector<std::string> startOids = {
+            "1.3.6.1.2.1.1",      // next after system subtree root
+            "1.3.6.1.2.1.1.1",    // next after sysDescr subtree root
+            "1.3.6.1.2.1.1.2"     // next after sysObjectID subtree root
+        };
+
+        for (const auto& startOid : startOids) {
+            SnmpTask task;
+            task.host = host;
+            task.community = community;
+            task.operation = SnmpOperation::GETNEXT;
+            task.oids = {startOid};
+            task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+                if (results.empty()) {
+                    std::cout << "  GETNEXT ERROR: no response" << std::endl;
+                    return;
+                }
+                for (const auto& [oid, var] : results) {
+                    char valBuf[1024];
+                    snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                    std::cout << "  GETNEXT -> " << oid << " = " << valBuf << std::endl;
+                }
+            };
+            worker.addTask(task);
+        }
+
+        // Multi-OID GETNEXT in a single PDU
+        SnmpTask multiTask;
+        multiTask.host = host;
+        multiTask.community = community;
+        multiTask.operation = SnmpOperation::GETNEXT;
+        multiTask.oids = {"1.3.6.1.2.1.1.3", "1.3.6.1.2.1.1.5"};
+        multiTask.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+            std::cout << "  Multi-GETNEXT response:" << std::endl;
+            for (const auto& [oid, var] : results) {
+                char valBuf[1024];
+                snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                std::cout << "    " << oid << " = " << valBuf << std::endl;
+            }
+        };
+        worker.addTask(multiTask);
+
+        worker.wait();
+        worker.stop();
+    }
+
+    std::cout << std::endl << "=== Example 7: Async SNMP SET Operation ===" << std::endl;
     {
         SnmpWorker worker;
         worker.start();
@@ -229,7 +312,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Note: SET operations may fail if the SNMP agent is read-only" << std::endl;
     }
 
-    std::cout << std::endl << "=== Example 6: Trap Receiver with Concurrent GET Operations ===" << std::endl;
+    std::cout << std::endl << "=== Example 8: Trap Receiver with Concurrent GET Operations ===" << std::endl;
     {
         std::cout << "This example shows you can use trap receiver and perform GET/SET operations simultaneously." << std::endl;
         std::cout << "To test trap reception, send a trap from another terminal:" << std::endl;
@@ -298,7 +381,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Trap receiver and worker stopped successfully" << std::endl;
     }
 
-    std::cout << std::endl << "=== Example 7: SNMP INFORM Operation ===" << std::endl;
+    std::cout << std::endl << "=== Example 9: SNMP INFORM Operation ===" << std::endl;
     {
         SnmpWorker worker;
         worker.start();
@@ -333,12 +416,12 @@ int main(int argc, char* argv[]) {
     std::cout << std::endl << "=== Demo Complete ===" << std::endl;
     std::cout << std::endl;
     std::cout << "Summary:" << std::endl;
-    std::cout << "- SnmpSession supports both single OID and multi-OID GET" << std::endl;
+    std::cout << "- SnmpSession supports single/multi-OID GET and GETNEXT" << std::endl;
     std::cout << "- SnmpWorker uses snmp_select for efficient async I/O" << std::endl;
     std::cout << "- Single thread handles all SNMP requests using select()" << std::endl;
     std::cout << "- Unified API: always use vector for OIDs, single callback type" << std::endl;
-    std::cout << "- Async SET operations for modifying SNMP values" << std::endl;
-    std::cout << "- Async INFORM operations with acknowledgment" << std::endl;
+    std::cout << "- Async GET, GETNEXT, SET, and INFORM operations" << std::endl;
+    std::cout << "- GETNEXT callback returns the actual response OID (not the requested one)" << std::endl;
     std::cout << "- Built-in SNMP trap receiver for monitoring notifications" << std::endl;
     std::cout << "- Better performance with concurrent requests" << std::endl;
 

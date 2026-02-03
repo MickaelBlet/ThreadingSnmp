@@ -22,6 +22,8 @@ public:
 
     std::string get(const std::string& oid);
     std::vector<std::pair<std::string, std::string>> getMulti(const std::vector<std::string>& oids);
+    std::pair<std::string, std::string> getNext(const std::string& oid);
+    std::vector<std::pair<std::string, std::string>> getNextMulti(const std::vector<std::string>& oids);
     bool set(const std::string& oid, char type, const std::string& value);
 
 private:

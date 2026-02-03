@@ -179,6 +179,56 @@ worker.wait();
 worker.stop();
 ```
 
+#### Sync GETNEXT
+
+GETNEXT retrieves the **next** OID in the MIB tree after the one requested. The returned OID is different from what you asked for — both `getNext` and `getNextMulti` return the actual response OID as the first element of each pair.
+
+```cpp
+SnmpSession session("192.168.1.1", "public");
+if (session.open()) {
+    // Single GETNEXT — returns (next_oid, value)
+    auto result = session.getNext("1.3.6.1.2.1.1");
+    std::cout << result.first << " = " << result.second << std::endl;
+
+    // Multi GETNEXT — single PDU, multiple starting points
+    auto results = session.getNextMulti({
+        "1.3.6.1.2.1.1.1",   // next after sysDescr subtree
+        "1.3.6.1.2.1.1.3"    // next after sysUpTime subtree
+    });
+    for (const auto& r : results) {
+        std::cout << r.first << " = " << r.second << std::endl;
+    }
+    session.close();
+}
+```
+
+#### Async GETNEXT
+
+Works exactly like async GET but uses `SNMP_MSG_GETNEXT`. The OID string in each result pair is extracted from the **response**, not from the original request.
+
+```cpp
+SnmpWorker worker;
+worker.start();
+
+SnmpTask task;
+task.host = "192.168.1.1";
+task.community = "public";
+task.operation = SnmpOperation::GETNEXT;
+task.oids = {"1.3.6.1.2.1.1.1", "1.3.6.1.2.1.1.3"};  // starting points
+task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+    for (const auto& [oid, var] : results) {
+        // oid here is the NEXT OID returned by the agent
+        char valBuf[1024];
+        snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+        std::cout << oid << " = " << valBuf << std::endl;
+    }
+};
+
+worker.addTask(task);
+worker.wait();
+worker.stop();
+```
+
 #### Async SNMP SET Operation
 
 ```cpp

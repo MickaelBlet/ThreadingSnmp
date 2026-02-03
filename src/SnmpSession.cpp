@@ -182,6 +182,120 @@ std::vector<std::pair<std::string, std::string>> SnmpSession::getMulti(const std
     return results;
 }
 
+std::pair<std::string, std::string> SnmpSession::getNext(const std::string& id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (!isOpen_) {
+        return {"", "ERROR: Session not open"};
+    }
+
+    netsnmp_pdu* pdu = snmp_pdu_create(SNMP_MSG_GETNEXT);
+    oid oidArray[MAX_OID_LEN];
+    size_t oidLen = MAX_OID_LEN;
+
+    if (!read_objid(id.c_str(), oidArray, &oidLen)) {
+        snmp_free_pdu(pdu);
+        return {"", "ERROR: Invalid OID"};
+    }
+
+    snmp_add_null_var(pdu, oidArray, oidLen);
+
+    netsnmp_pdu* response = nullptr;
+    int status = snmp_synch_response(sessionHandle_, pdu, &response);
+
+    std::pair<std::string, std::string> result;
+    if (status == STAT_SUCCESS && response->errstat == SNMP_ERR_NOERROR) {
+        if (response->variables) {
+            char oidBuf[256];
+            char valBuf[1024];
+            snprint_objid(oidBuf, sizeof(oidBuf), response->variables->name, response->variables->name_length);
+            snprint_value(valBuf, sizeof(valBuf), response->variables->name, response->variables->name_length, response->variables);
+            result = {std::string(oidBuf), std::string(valBuf)};
+        }
+    } else {
+        if (status == STAT_SUCCESS) {
+            result = {"", "ERROR: " + std::string(snmp_errstring(response->errstat))};
+        } else {
+            char* err;
+            snmp_error(sessionHandle_, nullptr, nullptr, &err);
+            result = {"", "ERROR: " + std::string(err)};
+            free(err);
+        }
+    }
+
+    if (response != nullptr) {
+        snmp_free_pdu(response);
+    }
+
+    return result;
+}
+
+std::vector<std::pair<std::string, std::string>> SnmpSession::getNextMulti(const std::vector<std::string>& oids) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<std::pair<std::string, std::string>> results;
+
+    if (!isOpen_) {
+        for (size_t i = 0; i < oids.size(); i++) {
+            results.push_back({"", "ERROR: Session not open"});
+        }
+        return results;
+    }
+
+    if (oids.empty()) {
+        return results;
+    }
+
+    netsnmp_pdu* pdu = snmp_pdu_create(SNMP_MSG_GETNEXT);
+
+    for (const auto& oidStr : oids) {
+        oid oidArray[MAX_OID_LEN];
+        size_t oidLen = MAX_OID_LEN;
+
+        if (!read_objid(oidStr.c_str(), oidArray, &oidLen)) {
+            snmp_free_pdu(pdu);
+            for (size_t i = 0; i < oids.size(); i++) {
+                results.push_back({"", "ERROR: Invalid OID"});
+            }
+            return results;
+        }
+
+        snmp_add_null_var(pdu, oidArray, oidLen);
+    }
+
+    netsnmp_pdu* response = nullptr;
+    int status = snmp_synch_response(sessionHandle_, pdu, &response);
+
+    if (status == STAT_SUCCESS && response->errstat == SNMP_ERR_NOERROR) {
+        for (netsnmp_variable_list* vars = response->variables; vars != nullptr; vars = vars->next_variable) {
+            char oidBuf[256];
+            char valBuf[1024];
+            snprint_objid(oidBuf, sizeof(oidBuf), vars->name, vars->name_length);
+            snprint_value(valBuf, sizeof(valBuf), vars->name, vars->name_length, vars);
+            results.push_back({std::string(oidBuf), std::string(valBuf)});
+        }
+    } else {
+        std::string errorMsg;
+        if (status == STAT_SUCCESS) {
+            errorMsg = "ERROR: " + std::string(snmp_errstring(response->errstat));
+        } else {
+            char* err;
+            snmp_error(sessionHandle_, nullptr, nullptr, &err);
+            errorMsg = "ERROR: " + std::string(err);
+            free(err);
+        }
+        for (size_t i = 0; i < oids.size(); i++) {
+            results.push_back({"", errorMsg});
+        }
+    }
+
+    if (response != nullptr) {
+        snmp_free_pdu(response);
+    }
+
+    return results;
+}
+
 bool SnmpSession::set(const std::string& id, char type, const std::string& value) {
     std::lock_guard<std::mutex> lock(mutex_);
 

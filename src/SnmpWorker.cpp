@@ -98,13 +98,21 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                     context->task.informCallback(true, "INFORM acknowledged");
                 }
             } else {
-                // GET operation - build OID to variable list mapping
+                // GET / GETNEXT - build OID to variable list mapping
                 std::vector<std::pair<std::string, netsnmp_variable_list*>> results;
                 size_t idx = 0;
                 for (netsnmp_variable_list* vars = pdu->variables;
                      vars != nullptr && idx < context->task.oids.size();
                      vars = vars->next_variable, ++idx) {
-                    results.push_back({context->task.oids[idx], vars});
+                    if (context->task.operation == SnmpOperation::GETNEXT) {
+                        // GETNEXT: OID in response is different from what was requested
+                        char oidBuf[256];
+                        snprint_objid(oidBuf, sizeof(oidBuf), vars->name, vars->name_length);
+                        results.push_back({std::string(oidBuf), vars});
+                    } else {
+                        // GET: response OID matches what was requested
+                        results.push_back({context->task.oids[idx], vars});
+                    }
                 }
                 if (context->task.callback) {
                     context->task.callback(results);
@@ -285,8 +293,8 @@ void SnmpWorker::processTask(const SnmpTask& task) {
             }
         }
     } else {
-        // GET operation - always use oids vector
-        pdu = snmp_pdu_create(SNMP_MSG_GET);
+        // GET or GETNEXT operation - always use oids vector
+        pdu = snmp_pdu_create(task.operation == SnmpOperation::GETNEXT ? SNMP_MSG_GETNEXT : SNMP_MSG_GET);
         for (const auto& oidStr : task.oids) {
             oid oidArray[MAX_OID_LEN];
             size_t oidLen = MAX_OID_LEN;

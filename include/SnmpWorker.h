@@ -16,6 +16,7 @@
 
 enum class SnmpOperation {
     GET,
+    GETNEXT,
     SET,
     INFORM
 };
