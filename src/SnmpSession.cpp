@@ -296,6 +296,75 @@ std::vector<std::pair<std::string, std::string>> SnmpSession::getNextMulti(const
     return results;
 }
 
+std::vector<std::pair<std::string, std::string>> SnmpSession::walk(const std::string& baseOid) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<std::pair<std::string, std::string>> results;
+
+    if (!isOpen_) {
+        return results;
+    }
+
+    oid baseOidArray[MAX_OID_LEN];
+    size_t baseOidLen = MAX_OID_LEN;
+    if (!read_objid(baseOid.c_str(), baseOidArray, &baseOidLen)) {
+        return results;
+    }
+
+    oid currentOid[MAX_OID_LEN];
+    size_t currentOidLen = baseOidLen;
+    memcpy(currentOid, baseOidArray, baseOidLen * sizeof(oid));
+
+    while (true) {
+        netsnmp_pdu* pdu = snmp_pdu_create(SNMP_MSG_GETNEXT);
+        snmp_add_null_var(pdu, currentOid, currentOidLen);
+
+        netsnmp_pdu* response = nullptr;
+        int status = snmp_synch_response(sessionHandle_, pdu, &response);
+
+        if (status != STAT_SUCCESS || !response || response->errstat != SNMP_ERR_NOERROR) {
+            if (response) snmp_free_pdu(response);
+            break;
+        }
+
+        netsnmp_variable_list* vars = response->variables;
+        if (!vars || vars->type == SNMP_ENDOFMIBVIEW) {
+            snmp_free_pdu(response);
+            break;
+        }
+
+        // Check if response OID is still within the base subtree
+        bool inSubtree = (vars->name_length > baseOidLen);
+        if (inSubtree) {
+            for (size_t i = 0; i < baseOidLen; i++) {
+                if (vars->name[i] != baseOidArray[i]) {
+                    inSubtree = false;
+                    break;
+                }
+            }
+        }
+
+        if (!inSubtree) {
+            snmp_free_pdu(response);
+            break;
+        }
+
+        char oidBuf[256];
+        char valBuf[1024];
+        snprint_objid(oidBuf, sizeof(oidBuf), vars->name, vars->name_length);
+        snprint_value(valBuf, sizeof(valBuf), vars->name, vars->name_length, vars);
+        results.push_back({std::string(oidBuf), std::string(valBuf)});
+
+        // Advance to the response OID for next iteration
+        currentOidLen = vars->name_length;
+        memcpy(currentOid, vars->name, vars->name_length * sizeof(oid));
+
+        snmp_free_pdu(response);
+    }
+
+    return results;
+}
+
 bool SnmpSession::set(const std::string& id, char type, const std::string& value) {
     std::lock_guard<std::mutex> lock(mutex_);
 

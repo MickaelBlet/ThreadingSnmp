@@ -87,6 +87,8 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
         context = it->second;
     }
 
+    bool walkContinued = false;
+
     if (operation == NETSNMP_CALLBACK_OP_RECEIVED_MESSAGE) {
         if (pdu->errstat == SNMP_ERR_NOERROR) {
             if (context->task.operation == SnmpOperation::SET) {
@@ -97,20 +99,59 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                 if (context->task.informCallback) {
                     context->task.informCallback(true, "INFORM acknowledged");
                 }
+            } else if (!context->task.walkBaseOid.empty() && context->walkBaseOidLen > 0) {
+                // Walk mode: check subtree and chain GETNEXTs automatically
+                bool inSubtree = false;
+                if (pdu->variables && pdu->variables->type != SNMP_ENDOFMIBVIEW &&
+                    pdu->variables->name_length > context->walkBaseOidLen) {
+                    inSubtree = true;
+                    for (size_t i = 0; i < context->walkBaseOidLen; i++) {
+                        if (pdu->variables->name[i] != context->walkBaseOidArray[i]) {
+                            inSubtree = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (inSubtree) {
+                    // Deliver current entry via callback
+                    std::vector<std::pair<std::string, netsnmp_variable_list*>> results;
+                    char oidBuf[256];
+                    snprint_objid(oidBuf, sizeof(oidBuf), pdu->variables->name, pdu->variables->name_length);
+                    results.push_back({std::string(oidBuf), pdu->variables});
+                    if (context->task.callback) {
+                        context->task.callback(results);
+                    }
+
+                    // Send next GETNEXT on the same session
+                    netsnmp_pdu* nextPdu = snmp_pdu_create(SNMP_MSG_GETNEXT);
+                    snmp_add_null_var(nextPdu, pdu->variables->name, pdu->variables->name_length);
+                    if (snmp_send(session, nextPdu) != 0) {
+                        snmp_free_pdu(nextPdu);
+                    } else {
+                        walkContinued = true;
+                    }
+                }
+
+                if (!walkContinued) {
+                    // Walk ended: subtree exhausted, endOfMibView, or send failed
+                    if (context->task.callback) {
+                        std::vector<std::pair<std::string, netsnmp_variable_list*>> emptyResults;
+                        context->task.callback(emptyResults);
+                    }
+                }
             } else {
-                // GET / GETNEXT - build OID to variable list mapping
+                // Normal GET / GETNEXT (no walk)
                 std::vector<std::pair<std::string, netsnmp_variable_list*>> results;
                 size_t idx = 0;
                 for (netsnmp_variable_list* vars = pdu->variables;
                      vars != nullptr && idx < context->task.oids.size();
                      vars = vars->next_variable, ++idx) {
                     if (context->task.operation == SnmpOperation::GETNEXT) {
-                        // GETNEXT: OID in response is different from what was requested
                         char oidBuf[256];
                         snprint_objid(oidBuf, sizeof(oidBuf), vars->name, vars->name_length);
                         results.push_back({std::string(oidBuf), vars});
                     } else {
-                        // GET: response OID matches what was requested
                         results.push_back({context->task.oids[idx], vars});
                     }
                 }
@@ -155,36 +196,43 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
         }
     }
 
-    context->completed = true;
+    if (!walkContinued) {
+        context->completed = true;
 
-    {
-        std::lock_guard<std::mutex> lock(worker->sessionMutex_);
-        if (context->session) {
-            // Don't call snmp_close() here! We're still inside the net-snmp callback.
-            // Queue it for cleanup after snmp_read() returns, along with allocated strings.
-            SessionCleanup cleanup;
-            cleanup.session = context->session;
-            cleanup.peername = context->peername_allocated;
-            cleanup.community = context->community_allocated;
-            worker->sessionsToClose_.push(cleanup);
-            context->session = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(worker->sessionMutex_);
+            if (context->session) {
+                // Don't call snmp_close() here! We're still inside the net-snmp callback.
+                // Queue it for cleanup after snmp_read() returns, along with allocated strings.
+                SessionCleanup cleanup;
+                cleanup.session = context->session;
+                cleanup.peername = context->peername_allocated;
+                cleanup.community = context->community_allocated;
+                worker->sessionsToClose_.push(cleanup);
+                context->session = nullptr;
+            }
+            worker->activeSessions_.erase(session);
         }
-        worker->activeSessions_.erase(session);
-    }
 
-    worker->activeTasks_.fetch_sub(1);
+        worker->activeTasks_.fetch_sub(1);
 
-    {
-        std::lock_guard<std::mutex> lock(worker->queueMutex_);
-        if (worker->taskQueue_.empty() && worker->activeTasks_.load() == 0) {
-            worker->completionCondition_.notify_all();
+        {
+            std::lock_guard<std::mutex> lock(worker->queueMutex_);
+            if (worker->taskQueue_.empty() && worker->activeTasks_.load() == 0) {
+                worker->completionCondition_.notify_all();
+            }
         }
     }
 
     return 1;
 }
 
-void SnmpWorker::processTask(const SnmpTask& task) {
+void SnmpWorker::processTask(SnmpTask task) {
+    if (!task.walkBaseOid.empty()) {
+        task.operation = SnmpOperation::GETNEXT;
+        task.oids = {task.walkBaseOid};
+    }
+
     netsnmp_session session;
     snmp_sess_init(&session);
 
@@ -240,6 +288,13 @@ void SnmpWorker::processTask(const SnmpTask& task) {
     context->completed = false;
     context->peername_allocated = peername_to_free;
     context->community_allocated = community_to_free;
+    context->walkBaseOidLen = 0;
+    if (!task.walkBaseOid.empty()) {
+        size_t len = MAX_OID_LEN;
+        if (read_objid(task.walkBaseOid.c_str(), context->walkBaseOidArray, &len)) {
+            context->walkBaseOidLen = len;
+        }
+    }
 
     {
         std::lock_guard<std::mutex> lock(sessionMutex_);

@@ -24,6 +24,7 @@ public:
     std::vector<std::pair<std::string, std::string>> getMulti(const std::vector<std::string>& oids);
     std::pair<std::string, std::string> getNext(const std::string& oid);
     std::vector<std::pair<std::string, std::string>> getNextMulti(const std::vector<std::string>& oids);
+    std::vector<std::pair<std::string, std::string>> walk(const std::string& baseOid);
     bool set(const std::string& oid, char type, const std::string& value);
 
 private:

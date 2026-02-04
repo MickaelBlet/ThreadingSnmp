@@ -17,6 +17,7 @@ This project provides a thread-safe wrapper around the net-snmp library, enablin
 - **Multi-OID GET support**: Query multiple OIDs in a single SNMP request
 - **Async SET operations**: Modify SNMP values asynchronously
 - **Async INFORM operations**: Send acknowledged SNMP notifications
+- **MIB Walk**: Automatic subtree traversal via repeated GETNEXT (sync and async)
 - **SNMP Trap Receiver**: Built-in trap/inform listener for monitoring notifications
 - **snmp_select based architecture**: Efficient async I/O using a single select thread
 - Support for SNMPv1, SNMPv2c, and SNMPv3
@@ -225,6 +226,53 @@ task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_lis
 };
 
 worker.addTask(task);
+worker.wait();
+worker.stop();
+```
+
+#### Sync MIB Walk
+
+A MIB walk retrieves all OIDs within a subtree by repeatedly issuing GETNEXT starting from a base OID. `walk()` loops internally and stops when the response OID leaves the subtree or `endOfMibView` is returned.
+
+```cpp
+SnmpSession session("192.168.1.1", "public");
+if (session.open()) {
+    // Walk the entire system subtree (1.3.6.1.2.1.1)
+    auto results = session.walk("1.3.6.1.2.1.1");
+    for (const auto& [oid, value] : results) {
+        std::cout << oid << " = " << value << std::endl;
+    }
+    session.close();
+}
+```
+
+#### Async MIB Walk
+
+Set `walkBaseOid` on an `SnmpTask` to enable automatic GETNEXT chaining. The `operation` and `oids` fields are set automatically — you only need to provide `walkBaseOid`. The callback is invoked **once per entry** during the walk, and a final time with an **empty vector** to signal completion.
+
+> **Important:** The `netsnmp_variable_list*` pointers are only valid for the duration of each callback invocation. Do not store them across calls.
+
+```cpp
+SnmpWorker worker;
+worker.start();
+
+SnmpTask walkTask;
+walkTask.host = "192.168.1.1";
+walkTask.community = "public";
+walkTask.walkBaseOid = "1.3.6.1.2.1.1";  // Walk the system subtree
+walkTask.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+    if (results.empty()) {
+        std::cout << "[Walk complete]" << std::endl;
+        return;
+    }
+    for (const auto& [oid, var] : results) {
+        char valBuf[1024];
+        snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+        std::cout << oid << " = " << valBuf << std::endl;
+    }
+};
+
+worker.addTask(walkTask);
 worker.wait();
 worker.stop();
 ```

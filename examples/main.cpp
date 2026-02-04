@@ -413,6 +413,53 @@ int main(int argc, char* argv[]) {
         std::cout << "Unlike TRAPs, INFORMs are acknowledged and retransmitted if lost" << std::endl;
     }
 
+    std::cout << std::endl << "=== Example 10: Sync MIB Walk ===" << std::endl;
+    {
+        SnmpSession session(host, community);
+
+        if (session.open()) {
+            std::cout << "Walking subtree 1.3.6.1.2.1.1 (system)..." << std::endl;
+            auto results = session.walk("1.3.6.1.2.1.1");
+            std::cout << "Walk returned " << results.size() << " entries:" << std::endl;
+            for (const auto& r : results) {
+                std::cout << "  " << r.first << " = " << r.second << std::endl;
+            }
+
+            session.close();
+        } else {
+            std::cout << "Failed to open session" << std::endl;
+        }
+    }
+
+    std::cout << std::endl << "=== Example 11: Async MIB Walk ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        SnmpTask walkTask;
+        walkTask.host = host;
+        walkTask.community = community;
+        walkTask.walkBaseOid = "1.3.6.1.2.1.1";  // Walk the system subtree
+        // operation and oids are set automatically from walkBaseOid
+        walkTask.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+            if (results.empty()) {
+                std::cout << "  [Walk complete]" << std::endl;
+                return;
+            }
+            for (const auto& [oid, var] : results) {
+                char valBuf[1024];
+                snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                std::cout << "  " << oid << " = " << valBuf << std::endl;
+            }
+        };
+
+        std::cout << "Walking subtree 1.3.6.1.2.1.1 (system) asynchronously..." << std::endl;
+        worker.addTask(walkTask);
+
+        worker.wait();
+        worker.stop();
+    }
+
     std::cout << std::endl << "=== Demo Complete ===" << std::endl;
     std::cout << std::endl;
     std::cout << "Summary:" << std::endl;
@@ -422,6 +469,7 @@ int main(int argc, char* argv[]) {
     std::cout << "- Unified API: always use vector for OIDs, single callback type" << std::endl;
     std::cout << "- Async GET, GETNEXT, SET, and INFORM operations" << std::endl;
     std::cout << "- GETNEXT callback returns the actual response OID (not the requested one)" << std::endl;
+    std::cout << "- MIB walk: sync walk() and async walkBaseOid for automatic subtree traversal" << std::endl;
     std::cout << "- Built-in SNMP trap receiver for monitoring notifications" << std::endl;
     std::cout << "- Better performance with concurrent requests" << std::endl;
 

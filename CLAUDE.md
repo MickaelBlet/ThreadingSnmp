@@ -64,6 +64,7 @@ Thread-safe synchronous SNMP session wrapper with mutex protection:
 - **Single GETNEXT**: `getNext(const std::string& oid)` - returns `pair<oid, value>` for the next OID in the MIB tree
 - **Multi GETNEXT**: `getNextMulti(const std::vector<std::string>& oids)` - multiple GETNEXT in a single PDU
 - **SET operations**: `set(const std::string& oid, char type, const std::string& value)`
+- **MIB Walk**: `walk(const std::string& baseOid)` - loops GETNEXT internally, returns all OID-value pairs within the subtree; stops on subtree exit or `endOfMibView`
 - Uses `snmp_synch_response()` for blocking operations
 - All methods are mutex-protected for thread safety
 - RAII-based resource management (session closed in destructor)
@@ -105,9 +106,12 @@ Encapsulates a single async SNMP request:
 - **Raw variable list**: Callback receives `netsnmp_variable_list*` directly for full SNMP data access
 - Common fields: `host`, `community`, `version` (default: SNMPv2c), `operation` (GET/GETNEXT/SET/INFORM)
 
+- **Walk mode**: Set `walkBaseOid` to a subtree OID to enable automatic GETNEXT chaining; `operation` and `oids` are set automatically; the session is reused across all chained requests without cleanup until the walk ends
+
 Callbacks:
 - GET: `std::function<void(const std::vector<std::pair<std::string, netsnmp_variable_list*>>&)>` - OID to variable mapping; OID string comes from `task.oids`
 - GETNEXT: same callback type as GET, but the OID string in each pair is extracted from the **response** (the next OID in the MIB tree)
+- WALK: same callback type; called **once per entry** during the walk with a single-element vector; called with an **empty vector** when the walk completes (subtree exhausted or `endOfMibView`). The `netsnmp_variable_list*` pointers are only valid for the duration of each callback invocation.
 - SET: `std::function<void(bool success, const std::string& message)>` - Success/failure notification
 - INFORM: `std::function<void(bool success, const std::string& message)>` - Acknowledgment status
 
@@ -256,6 +260,7 @@ worker.stop();
 - Always clean up sessions: add entry to `activeSessions_` when sending, remove in callback
 - Update `activeTasks_` counter correctly: increment in `addTask()`, decrement in callback/error paths
 - Notify `completionCondition_` when `taskQueue_.empty() && activeTasks_ == 0`
+- Walk mode reuses the same session across chained GETNEXTs: `snmp_send()` is called from within `asyncCallback` to queue the next request; session cleanup and `activeTasks_` decrement are skipped while `walkContinued` is true
 
 ### Memory Management
 - `SessionContext` uses `std::shared_ptr` to safely reference from both select thread and callback

@@ -40,6 +40,7 @@ struct SnmpTask {
     std::vector<SnmpSetValue> setValues;
     std::vector<SnmpVarbind> informVarbinds;
     std::string trapOid;
+    std::string walkBaseOid;  // When set, enables automatic GETNEXT chaining (MIB walk)
     std::function<void(const std::vector<std::pair<std::string, netsnmp_variable_list*>>&)> callback;  // OID to variable list mapping
     std::function<void(bool, const std::string&)> setCallback;
     std::function<void(bool, const std::string&)> informCallback;
@@ -84,6 +85,8 @@ private:
         bool completed;
         char* peername_allocated;
         u_char* community_allocated;
+        oid walkBaseOidArray[MAX_OID_LEN];
+        size_t walkBaseOidLen;
     };
 
     struct SessionCleanup {
@@ -93,7 +96,7 @@ private:
     };
 
     void selectThread();
-    void processTask(const SnmpTask& task);
+    void processTask(SnmpTask task);
     static int asyncCallback(int operation, netsnmp_session* session, int reqid, netsnmp_pdu* pdu, void* magic);
     static int trapCallback(int operation, netsnmp_session* session, int reqid, netsnmp_pdu* pdu, void* magic);
 
