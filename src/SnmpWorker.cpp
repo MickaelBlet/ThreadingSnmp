@@ -126,7 +126,7 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                     // Send next GETNEXT on the same session
                     netsnmp_pdu* nextPdu = snmp_pdu_create(SNMP_MSG_GETNEXT);
                     snmp_add_null_var(nextPdu, pdu->variables->name, pdu->variables->name_length);
-                    if (snmp_send(session, nextPdu) != 0) {
+                    if (snmp_send(session, nextPdu) == 0) {
                         snmp_free_pdu(nextPdu);
                     } else {
                         walkContinued = true;
