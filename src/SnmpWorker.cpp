@@ -423,21 +423,30 @@ void SnmpWorker::selectThread() {
         snmp_select_info(&fds, &fdset, &timeout, &block);
 
         if (fds > 0) {
-            int count = select(fds, &fdset, nullptr, nullptr, block ? nullptr : &timeout);
+            // Cap select timeout so we can check running_ periodically.
+            // Without this, select blocks indefinitely when only long-lived
+            // listener sessions (e.g. trap receiver) are active, which
+            // prevents stop()/join() from completing.
+            if (block || timeout.tv_sec > 0 || timeout.tv_usec > 100000) {
+                timeout.tv_sec = 0;
+                timeout.tv_usec = 100000;  // 100 ms
+            }
+            int count = select(fds, &fdset, nullptr, nullptr, &timeout);
             if (count > 0) {
                 snmp_read(&fdset);
             } else if (count == 0) {
                 snmp_timeout();
             }
+        }
 
-            // Now it's safe to close sessions that were marked for cleanup
-            // This must happen after both snmp_read() and snmp_timeout()
+        // Drain sessions queued for deferred cleanup.
+        // Runs every iteration so sessions are closed promptly even when
+        // fds == 0 (all pending requests already handled).
+        {
             std::lock_guard<std::mutex> sessionLock(sessionMutex_);
             while (!sessionsToClose_.empty()) {
                 SessionCleanup cleanup = sessionsToClose_.front();
                 sessionsToClose_.pop();
-
-                // Close the session and free the allocated strings (if they exist)
                 snmp_close(cleanup.session);
                 if (cleanup.peername) {
                     free(cleanup.peername);
