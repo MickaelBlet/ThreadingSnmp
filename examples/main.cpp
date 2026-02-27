@@ -1,0 +1,539 @@
+#include "SnmpSession.h"
+#include "SnmpWorker.h"
+#include <iostream>
+#include <chrono>
+#include <atomic>
+#include <thread>
+
+std::atomic<int> responseCount(0);
+
+int main(int argc, char* argv[]) {
+    SOCK_STARTUP;
+    init_snmp("ThreadingSnmp");
+
+    std::cout << "=== ThreadingSnmp Example ===" << std::endl;
+    std::cout << "C++14 Net-SNMP Threading Demo with snmp_select" << std::endl << std::endl;
+
+    if (argc < 2) {
+        std::cout << "Usage: " << argv[0] << " <host> [community]" << std::endl;
+        std::cout << "Example: " << argv[0] << " localhost public" << std::endl;
+        std::cout << std::endl;
+        std::cout << "Running demo with localhost..." << std::endl;
+    }
+
+    std::string host = (argc >= 2) ? argv[1] : "localhost";
+    std::string community = (argc >= 3) ? argv[2] : "public";
+
+    std::cout << "Host: " << host << std::endl;
+    std::cout << "Community: " << community << std::endl << std::endl;
+
+    std::cout << "=== Example 1: Single SNMP Session ===" << std::endl;
+    {
+        SnmpSession session(host, community);
+
+        if (session.open()) {
+            std::cout << "Session opened successfully" << std::endl;
+
+            std::string sysDescr = session.get("1.3.6.1.2.1.1.1.0");
+            std::cout << "sysDescr: " << sysDescr << std::endl;
+
+            std::string sysUpTime = session.get("1.3.6.1.2.1.1.3.0");
+            std::cout << "sysUpTime: " << sysUpTime << std::endl;
+
+            std::string sysContact = session.get("1.3.6.1.2.1.1.4.0");
+            std::cout << "sysContact: " << sysContact << std::endl;
+
+            session.close();
+        } else {
+            std::cout << "Failed to open session" << std::endl;
+        }
+    }
+
+    std::cout << std::endl << "=== Example 2: Multi-OID GET in Single Request ===" << std::endl;
+    {
+        SnmpSession session(host, community);
+
+        if (session.open()) {
+            std::cout << "Session opened successfully" << std::endl;
+
+            std::vector<std::string> oids = {
+                "1.3.6.1.2.1.1.1.0",
+                "1.3.6.1.2.1.1.2.0",
+                "1.3.6.1.2.1.1.3.0",
+                "1.3.6.1.2.1.1.4.0",
+                "1.3.6.1.2.1.1.5.0"
+            };
+
+            auto startTime = std::chrono::high_resolution_clock::now();
+            auto results = session.getMulti(oids);
+            auto endTime = std::chrono::high_resolution_clock::now();
+            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+
+            std::cout << "Retrieved " << results.size() << " OIDs in " << duration.count() << " ms:" << std::endl;
+            for (const auto& result : results) {
+                std::cout << "  " << result.first << " -> " << result.second << std::endl;
+            }
+
+            session.close();
+        } else {
+            std::cout << "Failed to open session" << std::endl;
+        }
+    }
+
+    std::cout << std::endl << "=== Example 3: Sync GETNEXT ===" << std::endl;
+    {
+        SnmpSession session(host, community);
+
+        if (session.open()) {
+            std::cout << "Session opened successfully" << std::endl;
+
+            // Single GETNEXT - returns the next OID after the requested one
+            auto result = session.getNext("1.3.6.1.2.1.1");
+            std::cout << "Next after 1.3.6.1.2.1.1 -> " << result.first << " = " << result.second << std::endl;
+
+            // Multi GETNEXT - walk from multiple starting points in one request
+            std::vector<std::string> startOids = {
+                "1.3.6.1.2.1.1.1",   // next after sysDescr subtree root
+                "1.3.6.1.2.1.1.3",   // next after sysUpTime subtree root
+                "1.3.6.1.2.1.1.5"    // next after sysName subtree root
+            };
+
+            auto results = session.getNextMulti(startOids);
+            std::cout << "Multi GETNEXT results:" << std::endl;
+            for (const auto& r : results) {
+                std::cout << "  " << r.first << " = " << r.second << std::endl;
+            }
+
+            session.close();
+        } else {
+            std::cout << "Failed to open session" << std::endl;
+        }
+    }
+
+    std::cout << std::endl << "=== Example 4: Async Single OID Requests ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        std::vector<std::string> oids = {
+            "1.3.6.1.2.1.1.1.0",
+            "1.3.6.1.2.1.1.2.0",
+            "1.3.6.1.2.1.1.3.0",
+            "1.3.6.1.2.1.1.4.0",
+            "1.3.6.1.2.1.1.5.0",
+            "1.3.6.1.2.1.1.6.0",
+            "1.3.6.1.2.1.1.7.0"
+        };
+
+        auto startTime = std::chrono::high_resolution_clock::now();
+
+        // Each task requests one OID
+        for (const auto& oid : oids) {
+            SnmpTask task;
+            task.host = host;
+            task.community = community;
+            task.oids = {oid};  // Single OID in vector
+            task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+                if (results.empty()) {
+                    std::cout << "ERROR: Failed to get response" << std::endl;
+                    return;
+                }
+                // Iterate through OID-variable pairs
+                for (const auto& [oid, var] : results) {
+                    char valBuf[1024];
+                    snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                    std::cout << "OID: " << oid << " -> " << valBuf << std::endl;
+                }
+            };
+            worker.addTask(task);
+        }
+
+        std::cout << "Waiting for all async tasks to complete..." << std::endl;
+        worker.wait();
+
+        auto endTime = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+
+        std::cout << std::endl << "All async tasks completed in " << duration.count() << " ms" << std::endl;
+
+        worker.stop();
+    }
+
+    std::cout << std::endl << "=== Example 5: Async Multi-OID GET ===" << std::endl;
+    {
+        responseCount.store(0);
+        SnmpWorker worker;
+        worker.start();
+
+        std::vector<std::string> group1 = {
+            "1.3.6.1.2.1.1.1.0",
+            "1.3.6.1.2.1.1.2.0",
+            "1.3.6.1.2.1.1.3.0"
+        };
+
+        std::vector<std::string> group2 = {
+            "1.3.6.1.2.1.1.4.0",
+            "1.3.6.1.2.1.1.5.0",
+            "1.3.6.1.2.1.1.6.0"
+        };
+
+        auto startTime = std::chrono::high_resolution_clock::now();
+
+        SnmpTask task1;
+        task1.host = host;
+        task1.community = community;
+        task1.oids = group1;
+        task1.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+            std::cout << "Group 1 response:" << std::endl;
+            if (results.empty()) {
+                std::cout << "  ERROR: Failed to get response" << std::endl;
+                responseCount.fetch_add(1);
+                return;
+            }
+            for (const auto& [oid, var] : results) {
+                char valBuf[1024];
+                snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                std::cout << "  " << oid << " -> " << valBuf << std::endl;
+            }
+            responseCount.fetch_add(1);
+        };
+        worker.addTask(task1);
+
+        SnmpTask task2;
+        task2.host = host;
+        task2.community = community;
+        task2.oids = group2;
+        task2.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+            std::cout << "Group 2 response:" << std::endl;
+            if (results.empty()) {
+                std::cout << "  ERROR: Failed to get response" << std::endl;
+                responseCount.fetch_add(1);
+                return;
+            }
+            for (const auto& [oid, var] : results) {
+                char valBuf[1024];
+                snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                std::cout << "  " << oid << " -> " << valBuf << std::endl;
+            }
+            responseCount.fetch_add(1);
+        };
+        worker.addTask(task2);
+
+        std::cout << "Waiting for all multi-OID async tasks to complete..." << std::endl;
+        worker.wait();
+
+        auto endTime = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime);
+
+        std::cout << std::endl << "All multi-OID async tasks completed in " << duration.count() << " ms" << std::endl;
+        std::cout << "Total responses: " << responseCount.load() << std::endl;
+
+        worker.stop();
+    }
+
+    std::cout << std::endl << "=== Example 6: Async GETNEXT ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        // Walk forward from 1.3.6.1.2.1.1 — each task gets the next OID
+        // Note: the OID in each result pair is the ACTUAL response OID, not the requested one
+        std::vector<std::string> startOids = {
+            "1.3.6.1.2.1.1",      // next after system subtree root
+            "1.3.6.1.2.1.1.1",    // next after sysDescr subtree root
+            "1.3.6.1.2.1.1.2"     // next after sysObjectID subtree root
+        };
+
+        for (const auto& startOid : startOids) {
+            SnmpTask task;
+            task.host = host;
+            task.community = community;
+            task.operation = SnmpOperation::GETNEXT;
+            task.oids = {startOid};
+            task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+                if (results.empty()) {
+                    std::cout << "  GETNEXT ERROR: no response" << std::endl;
+                    return;
+                }
+                for (const auto& [oid, var] : results) {
+                    char valBuf[1024];
+                    snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                    std::cout << "  GETNEXT -> " << oid << " = " << valBuf << std::endl;
+                }
+            };
+            worker.addTask(task);
+        }
+
+        // Multi-OID GETNEXT in a single PDU
+        SnmpTask multiTask;
+        multiTask.host = host;
+        multiTask.community = community;
+        multiTask.operation = SnmpOperation::GETNEXT;
+        multiTask.oids = {"1.3.6.1.2.1.1.3", "1.3.6.1.2.1.1.5"};
+        multiTask.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+            std::cout << "  Multi-GETNEXT response:" << std::endl;
+            for (const auto& [oid, var] : results) {
+                char valBuf[1024];
+                snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                std::cout << "    " << oid << " = " << valBuf << std::endl;
+            }
+        };
+        worker.addTask(multiTask);
+
+        worker.wait();
+        worker.stop();
+    }
+
+    std::cout << std::endl << "=== Example 7: Async SNMP SET Operation ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        SnmpTask setTask;
+        setTask.host = host;
+        setTask.community = community;
+        setTask.operation = SnmpOperation::SET;
+        setTask.setValues = {
+            {"1.3.6.1.2.1.1.4.0", 's', "admin@example.com"},
+            {"1.3.6.1.2.1.1.6.0", 's', "Server Room A"}
+        };
+        setTask.setCallback = [](bool success, const std::string& message) {
+            if (success) {
+                std::cout << "SET operation succeeded: " << message << std::endl;
+            } else {
+                std::cout << "SET operation failed: " << message << std::endl;
+            }
+        };
+
+        worker.addTask(setTask);
+        worker.wait();
+        worker.stop();
+
+        std::cout << "Note: SET operations may fail if the SNMP agent is read-only" << std::endl;
+    }
+
+    std::cout << std::endl << "=== Example 8: Trap Receiver with Concurrent GET Operations ===" << std::endl;
+    {
+        std::cout << "This example shows you can use trap receiver and perform GET/SET operations simultaneously." << std::endl;
+        std::cout << "To test trap reception, send a trap from another terminal:" << std::endl;
+        std::cout << "Example: snmptrap -v 2c -c public localhost '' 1.3.6.1.4.1.8072.2.3.0.1 1.3.6.1.4.1.8072.2.3.2.1 i 123456" << std::endl;
+        std::cout << std::endl;
+
+        SnmpWorker worker;
+        worker.start();
+
+        auto trapHandler = [](const SnmpTrap& trap) {
+            std::cout << std::endl << "=== TRAP RECEIVED ===" << std::endl;
+            std::cout << "Source: " << trap.sourceIp << std::endl;
+            std::cout << "Community: " << trap.community << std::endl;
+            if (!trap.enterpriseOid.empty()) {
+                std::cout << "Enterprise OID: " << trap.enterpriseOid << std::endl;
+                std::cout << "Generic Trap: " << trap.genericTrap << std::endl;
+                std::cout << "Specific Trap: " << trap.specificTrap << std::endl;
+                std::cout << "Uptime: " << trap.uptime << std::endl;
+            }
+            std::cout << "Varbinds:" << std::endl;
+            // Iterate through raw variable list
+            for (netsnmp_variable_list* v = trap.varbinds; v != nullptr; v = v->next_variable) {
+                char oidBuf[256];
+                char valBuf[1024];
+                snprint_objid(oidBuf, sizeof(oidBuf), v->name, v->name_length);
+                snprint_value(valBuf, sizeof(valBuf), v->name, v->name_length, v);
+                std::cout << "  " << oidBuf << " = " << valBuf << std::endl;
+            }
+            std::cout << "===================" << std::endl;
+        };
+
+        std::cout << "Starting trap receiver on port 162..." << std::endl;
+        worker.startTrapReceiver(162, trapHandler);
+
+        // Perform GET operations while trap receiver is running - they work concurrently!
+        std::cout << "Performing GET operations while trap receiver is active..." << std::endl;
+        for (int i = 0; i < 3; i++) {
+            SnmpTask task;
+            task.host = host;
+            task.community = community;
+            task.oids = {"1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0"};
+            task.callback = [i](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+                std::cout << "GET request " << (i + 1) << " completed while trap receiver is active:" << std::endl;
+                if (results.empty()) {
+                    std::cout << "  ERROR: Failed to get response" << std::endl;
+                    return;
+                }
+                for (const auto& [oid, var] : results) {
+                    char valBuf[1024];
+                    snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                    std::cout << "  " << oid << " -> " << valBuf << std::endl;
+                }
+            };
+            worker.addTask(task);
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+
+        std::cout << "Waiting for GET operations to complete..." << std::endl;
+        worker.wait();
+
+        std::cout << "Trap receiver still running (waiting 5 more seconds for traps)..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+
+        worker.stopTrapReceiver();
+        worker.stop();
+        std::cout << "Trap receiver and worker stopped successfully" << std::endl;
+    }
+
+    std::cout << std::endl << "=== Example 9: SNMP INFORM Operation ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        SnmpTask informTask;
+        informTask.host = host;
+        informTask.community = community;
+        informTask.operation = SnmpOperation::INFORM;
+        informTask.trapOid = "1.3.6.1.4.1.8072.2.3.0.1";
+
+        informTask.informVarbinds = {
+            {"1.3.6.1.4.1.8072.2.3.2.1", 'i', "12345"},
+            {"1.3.6.1.4.1.8072.2.3.2.2", 's', "Test Inform"}
+        };
+
+        informTask.informCallback = [](bool success, const std::string& message) {
+            if (success) {
+                std::cout << "INFORM operation succeeded: " << message << std::endl;
+            } else {
+                std::cout << "INFORM operation failed: " << message << std::endl;
+            }
+        };
+
+        worker.addTask(informTask);
+        worker.wait();
+        worker.stop();
+
+        std::cout << "Note: INFORM requires an SNMP manager to acknowledge the notification" << std::endl;
+        std::cout << "Unlike TRAPs, INFORMs are acknowledged and retransmitted if lost" << std::endl;
+    }
+
+    std::cout << std::endl << "=== Example 10: Sync MIB Walk ===" << std::endl;
+    {
+        SnmpSession session(host, community);
+
+        if (session.open()) {
+            std::cout << "Walking subtree 1.3.6.1.2.1.1 (system)..." << std::endl;
+            auto results = session.walk("1.3.6.1.2.1.1");
+            std::cout << "Walk returned " << results.size() << " entries:" << std::endl;
+            for (const auto& r : results) {
+                std::cout << "  " << r.first << " = " << r.second << std::endl;
+            }
+
+            session.close();
+        } else {
+            std::cout << "Failed to open session" << std::endl;
+        }
+    }
+
+    std::cout << std::endl << "=== Example 11: Async MIB Walk ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        SnmpTask walkTask;
+        walkTask.host = host;
+        walkTask.community = community;
+        walkTask.walkBaseOid = "1.3.6.1.2.1.1";  // Walk the system subtree
+        // operation and oids are set automatically from walkBaseOid
+        walkTask.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+            if (results.empty()) {
+                std::cout << "  [Walk complete]" << std::endl;
+                return;
+            }
+            for (const auto& [oid, var] : results) {
+                char valBuf[1024];
+                snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                std::cout << "  " << oid << " = " << valBuf << std::endl;
+            }
+        };
+
+        std::cout << "Walking subtree 1.3.6.1.2.1.1 (system) asynchronously..." << std::endl;
+        worker.addTask(walkTask);
+
+        worker.wait();
+        worker.stop();
+    }
+
+    std::cout << std::endl << "=== Example 12: SNMPv3 with Authentication (Sync) ===" << std::endl;
+    {
+        // SNMPv3 with authNoPriv (authentication but no encryption)
+        SnmpV3Config v3config;
+        v3config.securityName = "myuser";
+        v3config.securityLevel = SNMP_SEC_LEVEL_AUTHNOPRIV;
+        v3config.authProtocol = usmHMACSHA1AuthProtocol;
+        v3config.authProtocolLen = USM_AUTH_PROTO_SHA_LEN;
+        v3config.authPassword = "myauthpass";
+
+        SnmpSession session(host, v3config);
+        if (session.open()) {
+            std::cout << "SNMPv3 session opened (authNoPriv with SHA)" << std::endl;
+            std::string sysDescr = session.get("1.3.6.1.2.1.1.1.0");
+            std::cout << "sysDescr: " << sysDescr << std::endl;
+            session.close();
+        } else {
+            std::cout << "Failed to open SNMPv3 session (check credentials)" << std::endl;
+        }
+    }
+
+    std::cout << std::endl << "=== Example 13: SNMPv3 with Auth + Privacy (Async) ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        // SNMPv3 with authPriv (authentication and encryption)
+        SnmpTask task;
+        task.host = host;
+        task.version = SNMP_VERSION_3;
+        task.v3config.securityName = "myuser";
+        task.v3config.securityLevel = SNMP_SEC_LEVEL_AUTHPRIV;
+        task.v3config.authProtocol = usmHMACSHA1AuthProtocol;
+        task.v3config.authProtocolLen = USM_AUTH_PROTO_SHA_LEN;
+        task.v3config.authPassword = "myauthpass";
+        task.v3config.privProtocol = usmAESPrivProtocol;
+        task.v3config.privProtocolLen = USM_PRIV_PROTO_AES_LEN;
+        task.v3config.privPassword = "myprivpass";
+        task.oids = {"1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0"};
+        task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+            if (results.empty()) {
+                std::cout << "SNMPv3 request failed (check agent config)" << std::endl;
+                return;
+            }
+            std::cout << "SNMPv3 response (authPriv with SHA + AES):" << std::endl;
+            for (const auto& [oid, var] : results) {
+                char valBuf[1024];
+                snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                std::cout << "  " << oid << " -> " << valBuf << std::endl;
+            }
+        };
+
+        worker.addTask(task);
+        worker.wait();
+        worker.stop();
+    }
+
+    std::cout << std::endl << "=== Demo Complete ===" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Summary:" << std::endl;
+    std::cout << "- Supports SNMPv1, SNMPv2c, and SNMPv3 (auth + privacy)" << std::endl;
+    std::cout << "- SnmpSession supports single/multi-OID GET and GETNEXT" << std::endl;
+    std::cout << "- SnmpWorker uses snmp_select for efficient async I/O" << std::endl;
+    std::cout << "- Single thread handles all SNMP requests using select()" << std::endl;
+    std::cout << "- Unified API: always use vector for OIDs, single callback type" << std::endl;
+    std::cout << "- Async GET, GETNEXT, SET, and INFORM operations" << std::endl;
+    std::cout << "- GETNEXT callback returns the actual response OID (not the requested one)" << std::endl;
+    std::cout << "- MIB walk: sync walk() and async walkBaseOid for automatic subtree traversal" << std::endl;
+    std::cout << "- Built-in SNMP trap receiver for monitoring notifications" << std::endl;
+    std::cout << "- Better performance with concurrent requests" << std::endl;
+
+    snmp_shutdown("ThreadingSnmp");
+    shutdown_mib();
+    netsnmp_container_free_list();
+    SOCK_CLEANUP;
+    return 0;
+}
