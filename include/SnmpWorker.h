@@ -13,6 +13,7 @@
 #include <map>
 #include <net-snmp/net-snmp-config.h>
 #include <net-snmp/net-snmp-includes.h>
+#include "SnmpSession.h"
 
 enum class SnmpOperation {
     GET,
@@ -36,6 +37,7 @@ struct SnmpVarbind {
 struct SnmpTask {
     std::string host;
     std::string community;
+    SnmpV3Config v3config;         // SNMPv3 authentication config (used when version is SNMP_VERSION_3)
     std::vector<std::string> oids;  // Always use vector, even for single OID
     std::vector<SnmpSetValue> setValues;
     std::vector<SnmpVarbind> informVarbinds;
@@ -85,6 +87,8 @@ private:
         bool completed;
         char* peername_allocated;
         u_char* community_allocated;
+        char* securityName_allocated;
+        char* contextName_allocated;
         oid walkBaseOidArray[MAX_OID_LEN];
         size_t walkBaseOidLen;
     };
@@ -93,6 +97,8 @@ private:
         netsnmp_session* session;
         char* peername;
         u_char* community;
+        char* securityName;
+        char* contextName;
     };
 
     void selectThread();

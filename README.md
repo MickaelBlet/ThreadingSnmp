@@ -317,6 +317,71 @@ worker.stop();
 - `'a'` - IP Address
 - `'u'` - Unsigned Integer
 
+#### SNMPv3 with Authentication and Privacy
+
+ThreadingSnmp supports SNMPv3 with full authentication (MD5/SHA) and privacy (DES/AES) capabilities.
+
+**Sync SNMPv3 with authPriv:**
+
+```cpp
+#include "SnmpSession.h"
+
+// Configure SNMPv3
+SnmpV3Config v3config;
+v3config.securityName = "myuser";
+v3config.securityLevel = SNMP_SEC_LEVEL_AUTHPRIV;  // Auth + Privacy
+v3config.authProtocol = usmHMACSHA1AuthProtocol;
+v3config.authProtocolLen = USM_AUTH_PROTO_SHA_LEN;
+v3config.authPassword = "myauthpass";
+v3config.privProtocol = usmAESPrivProtocol;
+v3config.privProtocolLen = USM_PRIV_PROTO_AES_LEN;
+v3config.privPassword = "myprivpass";
+
+SnmpSession session("localhost", v3config);
+if (session.open()) {
+    std::string sysDescr = session.get("1.3.6.1.2.1.1.1.0");
+    std::cout << "sysDescr: " << sysDescr << std::endl;
+    session.close();
+}
+```
+
+**Async SNMPv3:**
+
+```cpp
+SnmpWorker worker;
+worker.start();
+
+SnmpTask task;
+task.host = "localhost";
+task.version = SNMP_VERSION_3;
+task.v3config.securityName = "myuser";
+task.v3config.securityLevel = SNMP_SEC_LEVEL_AUTHNOPRIV;  // Auth only
+task.v3config.authProtocol = usmHMACSHA1AuthProtocol;
+task.v3config.authProtocolLen = USM_AUTH_PROTO_SHA_LEN;
+task.v3config.authPassword = "myauthpass";
+task.oids = {"1.3.6.1.2.1.1.1.0"};
+task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+    // Process results
+};
+
+worker.addTask(task);
+worker.wait();
+worker.stop();
+```
+
+**Security Levels:**
+- `SNMP_SEC_LEVEL_NOAUTH` - No authentication, no privacy
+- `SNMP_SEC_LEVEL_AUTHNOPRIV` - Authentication, no privacy
+- `SNMP_SEC_LEVEL_AUTHPRIV` - Authentication and privacy
+
+**Authentication Protocols:**
+- `usmHMACMD5AuthProtocol` with `USM_AUTH_PROTO_MD5_LEN` - MD5
+- `usmHMACSHA1AuthProtocol` with `USM_AUTH_PROTO_SHA_LEN` - SHA-1
+
+**Privacy Protocols:**
+- `usmDESPrivProtocol` with `USM_PRIV_PROTO_DES_LEN` - DES
+- `usmAESPrivProtocol` with `USM_PRIV_PROTO_AES_LEN` - AES-128
+
 #### SNMP Trap Receiver
 
 The trap receiver can run concurrently with GET/SET/INFORM operations - they all share the same select thread for efficient I/O multiplexing.

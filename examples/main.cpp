@@ -460,9 +460,67 @@ int main(int argc, char* argv[]) {
         worker.stop();
     }
 
+    std::cout << std::endl << "=== Example 12: SNMPv3 with Authentication (Sync) ===" << std::endl;
+    {
+        // SNMPv3 with authNoPriv (authentication but no encryption)
+        SnmpV3Config v3config;
+        v3config.securityName = "myuser";
+        v3config.securityLevel = SNMP_SEC_LEVEL_AUTHNOPRIV;
+        v3config.authProtocol = usmHMACSHA1AuthProtocol;
+        v3config.authProtocolLen = USM_AUTH_PROTO_SHA_LEN;
+        v3config.authPassword = "myauthpass";
+
+        SnmpSession session(host, v3config);
+        if (session.open()) {
+            std::cout << "SNMPv3 session opened (authNoPriv with SHA)" << std::endl;
+            std::string sysDescr = session.get("1.3.6.1.2.1.1.1.0");
+            std::cout << "sysDescr: " << sysDescr << std::endl;
+            session.close();
+        } else {
+            std::cout << "Failed to open SNMPv3 session (check credentials)" << std::endl;
+        }
+    }
+
+    std::cout << std::endl << "=== Example 13: SNMPv3 with Auth + Privacy (Async) ===" << std::endl;
+    {
+        SnmpWorker worker;
+        worker.start();
+
+        // SNMPv3 with authPriv (authentication and encryption)
+        SnmpTask task;
+        task.host = host;
+        task.version = SNMP_VERSION_3;
+        task.v3config.securityName = "myuser";
+        task.v3config.securityLevel = SNMP_SEC_LEVEL_AUTHPRIV;
+        task.v3config.authProtocol = usmHMACSHA1AuthProtocol;
+        task.v3config.authProtocolLen = USM_AUTH_PROTO_SHA_LEN;
+        task.v3config.authPassword = "myauthpass";
+        task.v3config.privProtocol = usmAESPrivProtocol;
+        task.v3config.privProtocolLen = USM_PRIV_PROTO_AES_LEN;
+        task.v3config.privPassword = "myprivpass";
+        task.oids = {"1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0"};
+        task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+            if (results.empty()) {
+                std::cout << "SNMPv3 request failed (check agent config)" << std::endl;
+                return;
+            }
+            std::cout << "SNMPv3 response (authPriv with SHA + AES):" << std::endl;
+            for (const auto& [oid, var] : results) {
+                char valBuf[1024];
+                snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+                std::cout << "  " << oid << " -> " << valBuf << std::endl;
+            }
+        };
+
+        worker.addTask(task);
+        worker.wait();
+        worker.stop();
+    }
+
     std::cout << std::endl << "=== Demo Complete ===" << std::endl;
     std::cout << std::endl;
     std::cout << "Summary:" << std::endl;
+    std::cout << "- Supports SNMPv1, SNMPv2c, and SNMPv3 (auth + privacy)" << std::endl;
     std::cout << "- SnmpSession supports single/multi-OID GET and GETNEXT" << std::endl;
     std::cout << "- SnmpWorker uses snmp_select for efficient async I/O" << std::endl;
     std::cout << "- Single thread handles all SNMP requests using select()" << std::endl;

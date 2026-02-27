@@ -48,8 +48,10 @@ void SnmpWorker::stop() {
         SessionCleanup cleanup = sessionsToClose_.front();
         sessionsToClose_.pop();
         snmp_close(cleanup.session);
-        free(cleanup.peername);
-        free(cleanup.community);
+        if (cleanup.peername) free(cleanup.peername);
+        if (cleanup.community) free(cleanup.community);
+        if (cleanup.securityName) free(cleanup.securityName);
+        if (cleanup.contextName) free(cleanup.contextName);
     }
 }
 
@@ -208,6 +210,8 @@ int SnmpWorker::asyncCallback(int operation, netsnmp_session* session, int reqid
                 cleanup.session = context->session;
                 cleanup.peername = context->peername_allocated;
                 cleanup.community = context->community_allocated;
+                cleanup.securityName = context->securityName_allocated;
+                cleanup.contextName = context->contextName_allocated;
                 worker->sessionsToClose_.push(cleanup);
                 context->session = nullptr;
             }
@@ -238,24 +242,73 @@ void SnmpWorker::processTask(SnmpTask task) {
 
     session.version = task.version;
     session.peername = strdup(task.host.c_str());
-    session.community = reinterpret_cast<u_char*>(strdup(task.community.c_str()));
-    session.community_len = task.community.length();
     session.callback = asyncCallback;
     session.callback_magic = this;
     session.timeout = task.timeout;
     session.retries = task.retries;
 
-    netsnmp_session* sessionHandle = snmp_open(&session);
-
-    // snmp_open() makes copies of peername and community, so we need to free our originals
-    // Important: Only free AFTER snmp_read() completes, to avoid the callback crash
+    // Allocate strings that need to be freed later
     char* peername_to_free = session.peername;
-    u_char* community_to_free = session.community;
+    u_char* community_to_free = nullptr;
+    char* securityName_to_free = nullptr;
+    char* contextName_to_free = nullptr;
+
+    if (task.version == SNMP_VERSION_3) {
+        // SNMPv3 configuration
+        session.securityName = strdup(task.v3config.securityName.c_str());
+        session.securityNameLen = task.v3config.securityName.length();
+        session.securityLevel = task.v3config.securityLevel;
+        securityName_to_free = session.securityName;
+
+        // Authentication setup
+        if (task.v3config.securityLevel >= SNMP_SEC_LEVEL_AUTHNOPRIV) {
+            session.securityAuthProto = task.v3config.authProtocol;
+            session.securityAuthProtoLen = task.v3config.authProtocolLen;
+
+            if (!task.v3config.authPassword.empty()) {
+                session.securityAuthKeyLen = USM_AUTH_KU_LEN;
+                generate_Ku(session.securityAuthProto, session.securityAuthProtoLen,
+                           reinterpret_cast<const u_char*>(task.v3config.authPassword.c_str()),
+                           task.v3config.authPassword.length(),
+                           session.securityAuthKey, &session.securityAuthKeyLen);
+            }
+        }
+
+        // Privacy setup
+        if (task.v3config.securityLevel >= SNMP_SEC_LEVEL_AUTHPRIV) {
+            session.securityPrivProto = task.v3config.privProtocol;
+            session.securityPrivProtoLen = task.v3config.privProtocolLen;
+
+            if (!task.v3config.privPassword.empty()) {
+                session.securityPrivKeyLen = USM_PRIV_KU_LEN;
+                generate_Ku(session.securityAuthProto, session.securityAuthProtoLen,
+                           reinterpret_cast<const u_char*>(task.v3config.privPassword.c_str()),
+                           task.v3config.privPassword.length(),
+                           session.securityPrivKey, &session.securityPrivKeyLen);
+            }
+        }
+
+        // Optional context
+        if (!task.v3config.contextName.empty()) {
+            session.contextName = strdup(task.v3config.contextName.c_str());
+            session.contextNameLen = task.v3config.contextName.length();
+            contextName_to_free = session.contextName;
+        }
+    } else {
+        // SNMPv1/v2c configuration
+        session.community = reinterpret_cast<u_char*>(strdup(task.community.c_str()));
+        session.community_len = task.community.length();
+        community_to_free = session.community;
+    }
+
+    netsnmp_session* sessionHandle = snmp_open(&session);
 
     if (!sessionHandle) {
         // If snmp_open failed, free the allocated memory immediately
         free(peername_to_free);
-        free(community_to_free);
+        if (community_to_free) free(community_to_free);
+        if (securityName_to_free) free(securityName_to_free);
+        if (contextName_to_free) free(contextName_to_free);
         std::string errorMsg = "ERROR: Failed to open session";
         if (task.operation == SnmpOperation::SET) {
             if (task.setCallback) {
@@ -288,6 +341,8 @@ void SnmpWorker::processTask(SnmpTask task) {
     context->completed = false;
     context->peername_allocated = peername_to_free;
     context->community_allocated = community_to_free;
+    context->securityName_allocated = securityName_to_free;
+    context->contextName_allocated = contextName_to_free;
     context->walkBaseOidLen = 0;
     if (!task.walkBaseOid.empty()) {
         size_t len = MAX_OID_LEN;
@@ -448,12 +503,10 @@ void SnmpWorker::selectThread() {
                 SessionCleanup cleanup = sessionsToClose_.front();
                 sessionsToClose_.pop();
                 snmp_close(cleanup.session);
-                if (cleanup.peername) {
-                    free(cleanup.peername);
-                }
-                if (cleanup.community) {
-                    free(cleanup.community);
-                }
+                if (cleanup.peername) free(cleanup.peername);
+                if (cleanup.community) free(cleanup.community);
+                if (cleanup.securityName) free(cleanup.securityName);
+                if (cleanup.contextName) free(cleanup.contextName);
             }
         }
     }

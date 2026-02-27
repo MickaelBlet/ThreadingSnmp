@@ -7,6 +7,11 @@ SnmpSession::SnmpSession(const std::string& host, const std::string& community, 
     initializeSession();
 }
 
+SnmpSession::SnmpSession(const std::string& host, const SnmpV3Config& v3config)
+    : host_(host), version_(SNMP_VERSION_3), v3config_(v3config), sessionHandle_(nullptr), isOpen_(false) {
+    initializeSession();
+}
+
 SnmpSession::~SnmpSession() {
     close();
 }
@@ -14,13 +19,58 @@ SnmpSession::~SnmpSession() {
 void SnmpSession::initializeSession() {
     snmp_sess_init(&session_);
     session_.version = version_;
-    // Note: snmp_open() will take ownership of these allocated strings
-    // and free them when snmp_close() is called
     session_.peername = strdup(host_.c_str());
-    session_.community = reinterpret_cast<u_char*>(strdup(community_.c_str()));
-    session_.community_len = community_.length();
     session_.timeout = 1000000;
     session_.retries = 3;
+
+    if (version_ == SNMP_VERSION_3) {
+        // SNMPv3 configuration
+        session_.securityName = strdup(v3config_.securityName.c_str());
+        session_.securityNameLen = v3config_.securityName.length();
+        session_.securityLevel = v3config_.securityLevel;
+
+        // Authentication setup
+        if (v3config_.securityLevel >= SNMP_SEC_LEVEL_AUTHNOPRIV) {
+            session_.securityAuthProto = v3config_.authProtocol;
+            session_.securityAuthProtoLen = v3config_.authProtocolLen;
+
+            if (!v3config_.authPassword.empty()) {
+                session_.securityAuthKeyLen = USM_AUTH_KU_LEN;
+                if (generate_Ku(session_.securityAuthProto, session_.securityAuthProtoLen,
+                                reinterpret_cast<const u_char*>(v3config_.authPassword.c_str()),
+                                v3config_.authPassword.length(),
+                                session_.securityAuthKey, &session_.securityAuthKeyLen) != SNMPERR_SUCCESS) {
+                    std::cerr << "Error generating authentication key" << std::endl;
+                }
+            }
+        }
+
+        // Privacy setup
+        if (v3config_.securityLevel >= SNMP_SEC_LEVEL_AUTHPRIV) {
+            session_.securityPrivProto = v3config_.privProtocol;
+            session_.securityPrivProtoLen = v3config_.privProtocolLen;
+
+            if (!v3config_.privPassword.empty()) {
+                session_.securityPrivKeyLen = USM_PRIV_KU_LEN;
+                if (generate_Ku(session_.securityAuthProto, session_.securityAuthProtoLen,
+                                reinterpret_cast<const u_char*>(v3config_.privPassword.c_str()),
+                                v3config_.privPassword.length(),
+                                session_.securityPrivKey, &session_.securityPrivKeyLen) != SNMPERR_SUCCESS) {
+                    std::cerr << "Error generating privacy key" << std::endl;
+                }
+            }
+        }
+
+        // Optional context
+        if (!v3config_.contextName.empty()) {
+            session_.contextName = strdup(v3config_.contextName.c_str());
+            session_.contextNameLen = v3config_.contextName.length();
+        }
+    } else {
+        // SNMPv1/v2c configuration
+        session_.community = reinterpret_cast<u_char*>(strdup(community_.c_str()));
+        session_.community_len = community_.length();
+    }
 }
 
 bool SnmpSession::open() {
@@ -38,18 +88,32 @@ bool SnmpSession::open() {
         free(err);
         // snmp_open failed, so we need to free the allocated strings ourselves
         free(session_.peername);
-        free(session_.community);
+        if (version_ == SNMP_VERSION_3) {
+            free(session_.securityName);
+            if (session_.contextName) free(session_.contextName);
+        } else {
+            free(session_.community);
+        }
         session_.peername = nullptr;
         session_.community = nullptr;
+        session_.securityName = nullptr;
+        session_.contextName = nullptr;
         return false;
     }
 
-    // snmp_open() succeeded and made copies of peername and community.
+    // snmp_open() succeeded and made copies of allocated strings.
     // Free our originals to avoid memory leaks.
     free(session_.peername);
-    free(session_.community);
+    if (version_ == SNMP_VERSION_3) {
+        free(session_.securityName);
+        if (session_.contextName) free(session_.contextName);
+        session_.securityName = nullptr;
+        session_.contextName = nullptr;
+    } else {
+        free(session_.community);
+        session_.community = nullptr;
+    }
     session_.peername = nullptr;
-    session_.community = nullptr;
 
     isOpen_ = true;
     return true;

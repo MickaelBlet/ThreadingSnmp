@@ -75,6 +75,29 @@ Key implementation details:
 - Session initialization happens in `initializeSession()`, called from constructor
 - Default timeout: 1000000 microseconds (1 second), 3 retries
 
+### SNMPv3 Support
+
+Both SnmpSession and SnmpWorker support SNMPv3 with authentication and privacy:
+
+- **SnmpV3Config struct**: Configuration for SNMPv3 authentication
+  - `securityName`: Username
+  - `securityLevel`: SNMP_SEC_LEVEL_NOAUTH, SNMP_SEC_LEVEL_AUTHNOPRIV, or SNMP_SEC_LEVEL_AUTHPRIV
+  - `authProtocol` / `authProtocolLen`: Authentication protocol OID (e.g., usmHMACSHA1AuthProtocol with USM_AUTH_PROTO_SHA_LEN for SHA, usmHMACMD5AuthProtocol with USM_AUTH_PROTO_MD5_LEN for MD5)
+  - `authPassword`: Authentication passphrase
+  - `privProtocol` / `privProtocolLen`: Privacy protocol OID (e.g., usmAESPrivProtocol with USM_PRIV_PROTO_AES_LEN for AES, usmDESPrivProtocol with USM_PRIV_PROTO_DES_LEN for DES)
+  - `privPassword`: Privacy passphrase
+  - `contextName`: Optional context (default: empty)
+  - `contextEngineID`: Optional engine ID (default: empty, auto-discovered)
+
+- **SnmpSession v3 constructor**: `SnmpSession(host, v3config)`
+- **SnmpTask v3 config**: Set `task.version = SNMP_VERSION_3` and populate `task.v3config`
+
+Key implementation notes:
+- Authentication and privacy keys are derived from passwords using `generate_Ku()`
+- Keys are generated at session initialization time
+- Context name and engine ID are optional; engine ID is usually auto-discovered
+- All v3-specific strings are allocated with `strdup()` and freed after `snmp_open()` or on error
+
 ### SnmpWorker Class (include/SnmpWorker.h, src/SnmpWorker.cpp)
 
 Asynchronous SNMP operations using a single select thread:
@@ -233,6 +256,48 @@ multiTask.callback = [](const std::vector<std::pair<std::string, netsnmp_variabl
 worker.addTask(multiTask);
 
 worker.wait();  // Block until all tasks complete
+worker.stop();
+```
+
+### Using SNMPv3 with Authentication and Privacy
+
+```cpp
+// Sync SNMPv3
+SnmpV3Config v3config;
+v3config.securityName = "myuser";
+v3config.securityLevel = SNMP_SEC_LEVEL_AUTHPRIV;  // Auth + Privacy
+v3config.authProtocol = usmHMACSHA1AuthProtocol;
+v3config.authProtocolLen = USM_AUTH_PROTO_SHA_LEN;
+v3config.authPassword = "myauthpass";
+v3config.privProtocol = usmAESPrivProtocol;
+v3config.privProtocolLen = USM_PRIV_PROTO_AES_LEN;
+v3config.privPassword = "myprivpass";
+
+SnmpSession session("192.168.1.1", v3config);
+if (session.open()) {
+    std::string result = session.get("1.3.6.1.2.1.1.1.0");
+    std::cout << result << std::endl;
+    session.close();
+}
+
+// Async SNMPv3
+SnmpWorker worker;
+worker.start();
+
+SnmpTask task;
+task.host = "192.168.1.1";
+task.version = SNMP_VERSION_3;
+task.v3config = v3config;  // Use same config
+task.oids = {"1.3.6.1.2.1.1.1.0"};
+task.callback = [](const std::vector<std::pair<std::string, netsnmp_variable_list*>>& results) {
+    for (const auto& [oid, var] : results) {
+        char valBuf[1024];
+        snprint_value(valBuf, sizeof(valBuf), var->name, var->name_length, var);
+        std::cout << oid << " -> " << valBuf << std::endl;
+    }
+};
+worker.addTask(task);
+worker.wait();
 worker.stop();
 ```
 
